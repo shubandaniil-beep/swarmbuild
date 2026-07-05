@@ -113,7 +113,7 @@ export default function Settings() {
           <div className="text-3xl font-bold text-indigo-400">
             {summary.demo_generations_remaining}
           </div>
-          <div className="text-sm text-zinc-500">demo-запусков осталось</div>
+          <div className="text-sm text-zinc-500">trial-запусков осталось</div>
         </div>
       </div>
 

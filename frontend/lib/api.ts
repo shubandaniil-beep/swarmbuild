@@ -1,5 +1,13 @@
-export const API_URL =
-  process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000";
+const CONFIGURED_API_URL = process.env.NEXT_PUBLIC_API_URL?.replace(/\/$/, "");
+type ApiInit = RequestInit & { timeoutMs?: number };
+
+export const API_URL = CONFIGURED_API_URL || "http://127.0.0.1:8000";
+
+function apiUrl(): string {
+  if (CONFIGURED_API_URL) return CONFIGURED_API_URL;
+  if (typeof window === "undefined") return API_URL;
+  return `${window.location.protocol}//${window.location.hostname}:8000`;
+}
 
 export function getToken(): string {
   // Auth is cookie-only. Keep this helper for old call sites, but never read
@@ -37,7 +45,7 @@ export function clearAuth() {
 export async function logout() {
   const token = getToken();
   try {
-    await fetch(`${API_URL}/api/auth/logout`, {
+    await fetch(`${apiUrl()}/api/auth/logout`, {
       method: "POST",
       credentials: "include",
       headers: {
@@ -51,33 +59,74 @@ export async function logout() {
 }
 
 export function downloadUrl(path: string): string {
-  return `${API_URL}${path}`;
+  return `${apiUrl()}${path}`;
 }
 
-export async function api<T>(path: string, init?: RequestInit): Promise<T> {
+async function errorDetail(res: Response): Promise<string> {
+  const body = await res.text();
+  if (!body) return res.statusText || "request failed";
+  try {
+    const parsed = JSON.parse(body);
+    if (typeof parsed.detail === "string") return parsed.detail;
+  } catch {
+    // Fall through to the raw body for non-JSON responses.
+  }
+  return body;
+}
+
+function shouldRedirectOnAuthFailure(path: string): boolean {
+  const pathname = path.split("?")[0];
+  return ![
+    "/api/auth/login",
+    "/api/auth/register",
+    "/api/auth/admin-login",
+    "/api/auth/admin-autofill",
+  ].includes(pathname);
+}
+
+export async function api<T>(path: string, init?: ApiInit): Promise<T> {
+  const { timeoutMs = 45000, ...requestInit } = init ?? {};
+  const controller = typeof AbortController !== "undefined" && !requestInit.signal
+    ? new AbortController()
+    : null;
+  const timeout = controller
+    ? window.setTimeout(() => controller.abort(), timeoutMs)
+    : null;
   const token = getToken();
   const headers: Record<string, string> = {
     ...(token ? { Authorization: `Bearer ${token}` } : {}),
-    ...((init?.headers || {}) as Record<string, string>),
+    ...((requestInit.headers || {}) as Record<string, string>),
   };
-  if (init?.body && !Object.keys(headers).some((key) => key.toLowerCase() === "content-type")) {
+  if (requestInit.body && !Object.keys(headers).some((key) => key.toLowerCase() === "content-type")) {
     headers["Content-Type"] = "application/json";
   }
-  const res = await fetch(`${API_URL}${path}`, {
-    ...init,
-    credentials: "include",
-    headers,
-    cache: "no-store",
-  });
-  if ((res.status === 401 || res.status === 403) && typeof window !== "undefined") {
-    const adminTarget = location.pathname.startsWith("/admin") || path.startsWith("/api/admin");
-    const loginPath = adminTarget ? "/admin-login" : "/login";
-    if (location.pathname !== loginPath) {
-      clearAuth();
-      location.href = loginPath;
+  try {
+    const res = await fetch(`${apiUrl()}${path}`, {
+      ...requestInit,
+      credentials: "include",
+      headers,
+      cache: "no-store",
+      signal: requestInit.signal ?? controller?.signal,
+    });
+    if ((res.status === 401 || res.status === 403)
+        && typeof window !== "undefined"
+        && shouldRedirectOnAuthFailure(path)) {
+      const adminTarget = location.pathname.startsWith("/admin") || path.startsWith("/api/admin");
+      const loginPath = adminTarget ? "/admin-login" : "/login";
+      if (location.pathname !== loginPath) {
+        clearAuth();
+        location.href = loginPath;
+      }
+      throw new Error("401: требуется вход");
     }
-    throw new Error("401: требуется вход");
+    if (!res.ok) throw new Error(`${res.status}: ${await errorDetail(res)}`);
+    return res.json();
+  } catch (err) {
+    if (err instanceof DOMException && err.name === "AbortError") {
+      throw new Error("timeout: сервер не ответил вовремя");
+    }
+    throw err;
+  } finally {
+    if (timeout !== null) window.clearTimeout(timeout);
   }
-  if (!res.ok) throw new Error(`${res.status}: ${await res.text()}`);
-  return res.json();
 }

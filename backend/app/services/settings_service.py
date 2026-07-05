@@ -22,7 +22,7 @@ DEFAULTS: dict[str, object] = {
     "max_phase_runtime_minutes": env.MAX_PHASE_RUNTIME_MINUTES,
     "platform_fee_percent": env.PLATFORM_FEE_PERCENT,
     "tokens_per_usd": 100,          # 1 credit = $0.01 of user-facing budget
-    "demo_starting_credits": 100,   # $1 starter balance + one tiny demo run
+    "demo_starting_credits": 100,   # $1 starter balance for one tiny trial run
     "telegram_payment_bot_url": os.getenv("TELEGRAM_PAYMENT_BOT_URL", ""),
     "default_currency": "USD",
     "maintenance_mode": False,
@@ -31,7 +31,9 @@ DEFAULTS: dict[str, object] = {
     "max_accounts_per_ip_per_day": 3,
     "store_internal_prompts": False,
     "provider_call_timeout_seconds": 20,
-    "provider_max_output_tokens": 600,
+    "provider_max_output_tokens": 8000,
+    "parallel_agent_calls": True,
+    "max_parallel_agent_calls": 4,
     "max_login_attempts": 8,
     "login_window_minutes": 15,
     "trust_proxy_headers": False,

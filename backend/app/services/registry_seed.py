@@ -10,6 +10,7 @@ from ..lib.crypto import encrypt_key, mask_key
 from ..lib.security import hash_password
 from ..models import (ModelEntry, Project, ProjectPhase, ProjectType, Provider,
                       SystemSetting, Tariff, User)
+from . import key_pool
 from .settings_service import DEFAULTS
 
 _PROVIDERS = [
@@ -20,6 +21,7 @@ _PROVIDERS = [
      env.GEMINI_API_KEY),
     ("DeepSeek", "deepseek", "https://api.deepseek.com/v1", env.DEEPSEEK_API_KEY),
     ("Qwen", "qwen", "https://dashscope.aliyuncs.com/compatible-mode/v1", env.QWEN_API_KEY),
+    ("Groq", "groq", "https://api.groq.com/openai/v1", env.GROQ_API_KEY),
     ("OpenRouter", "openrouter", "https://openrouter.ai/api/v1", env.OPENROUTER_API_KEY),
 ]
 
@@ -35,6 +37,10 @@ _MODELS = [
     ("DeepSeek Chat", "deepseek", "deepseek-chat", "low", 0.3, 1.2, True),
     ("DeepSeek Reasoner", "deepseek", "deepseek-reasoner", "medium", 0.55, 2.2, True),
     ("Qwen Coder", "qwen", "qwen3-coder", "medium", 1.6, 6.4, True),
+    ("Groq Llama 3.3 70B", "groq", "llama-3.3-70b-versatile", "medium", 0.59, 0.79, True),
+    ("Groq Llama 3.1 8B Instant", "groq", "llama-3.1-8b-instant", "low", 0.05, 0.08, True),
+    ("Groq GPT OSS 120B", "groq", "openai/gpt-oss-120b", "medium", 0.15, 0.6, True),
+    ("Groq GPT OSS 20B", "groq", "openai/gpt-oss-20b", "low", 0.075, 0.3, True),
     ("OpenRouter Cohere North Mini Code Free", "openrouter", "cohere/north-mini-code:free",
      "low", 0, 0, True),
     ("OpenRouter Poolside Laguna XS Free", "openrouter", "poolside/laguna-xs-2.1:free",
@@ -98,6 +104,7 @@ def seed_defaults(db: Session) -> None:
                 priority=0 if ptype == "mock" else 100,
             ))
         db.commit()
+    _sync_env_provider_keys(db)
 
     if db.query(ModelEntry).count() == 0:
         providers = {p.provider_type: p for p in db.query(Provider).all()}
@@ -163,6 +170,30 @@ def seed_defaults(db: Session) -> None:
     _mark_interrupted_projects(db)
 
 
+def _sync_env_provider_keys(db: Session) -> None:
+    """Import env keys into empty/new provider pools without overwriting UI keys."""
+    by_type: dict[str, list[Provider]] = {}
+    for provider in db.query(Provider).order_by(Provider.created_at.asc()).all():
+        by_type.setdefault(provider.provider_type, []).append(provider)
+    for name, ptype, base_url, key in _PROVIDERS:
+        if ptype == "mock":
+            continue
+        candidates = by_type.get(ptype, [])
+        provider = next(
+            (p for p in candidates if p.name == name and p.base_url == base_url),
+            candidates[0] if candidates else None,
+        )
+        if provider is None:
+            provider = Provider(name=name, provider_type=ptype, base_url=base_url,
+                                enabled=True, status="untested", priority=100)
+            db.add(provider)
+            db.commit()
+            by_type.setdefault(ptype, []).append(provider)
+        if key and key_pool.add_keys(db, provider, key, label_prefix="env-"):
+            provider.status = "untested"
+            db.commit()
+
+
 def _founder_password() -> str:
     configured = os.getenv("ADMIN_PASSWORD") or os.getenv("FOUNDER_PASSWORD")
     if configured:
@@ -221,6 +252,7 @@ def _harden_runtime_settings(db: Session) -> None:
         "default_provider": ({"mock", "mock-swarm-v1"}, "auto"),
         "default_model": ({"mock", "mock-swarm-v1", "mock-swarm-mini"}, ""),
         "allow_mock_fallback": ({True, "true", "1", 1}, False),
+        "provider_max_output_tokens": ({600}, 2000),
     }
     changed = False
     for key, (legacy_values, new_value) in fixes.items():
@@ -237,6 +269,15 @@ def _harden_runtime_settings(db: Session) -> None:
         if model.priority < 900:
             model.priority = 999
             changed = True
+    groq = db.query(Provider).filter(Provider.provider_type == "groq").first()
+    if groq and groq.priority > 20:
+        groq.priority = 10
+        changed = True
+    if groq:
+        for model in db.query(ModelEntry).filter(ModelEntry.provider_id == groq.id).all():
+            if model.priority > 50:
+                model.priority = 20
+                changed = True
     if changed:
         db.commit()
 

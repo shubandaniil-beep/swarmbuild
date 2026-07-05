@@ -27,18 +27,21 @@ export default function AdminLogin() {
   }
 
   async function submit() {
+    if (busy) return;
     setBusy(true);
     setError("");
     try {
       const res = await api<{ user: object }>("/api/auth/admin-login", {
         method: "POST",
+        timeoutMs: 12000,
         body: JSON.stringify({ email, password }),
       });
       setAuth("", res.user);
       router.push("/admin/providers");
-    } catch {
-        setError("Неверный founder email или пароль.");
-        setBusy(false);
+    } catch (err) {
+      setError(String(err).replace(/^Error:\s*/, "") || "Неверный founder email или пароль.");
+    } finally {
+      setBusy(false);
     }
   }
 

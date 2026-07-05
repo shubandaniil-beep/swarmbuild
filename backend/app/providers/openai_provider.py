@@ -54,7 +54,8 @@ class OpenAICompatibleProvider(BaseProvider):
             ],
         }
         headers = {"Content-Type": "application/json",
-                   "Authorization": f"Bearer {self.api_key}"}
+                   "Authorization": f"Bearer {self.api_key}",
+                   "User-Agent": "SwarmBuild/1.0"}
         if self.card.get("provider") == "openrouter":
             referer = str(self.card.get("http_referer") or "").strip()
             title = str(self.card.get("app_title") or "").strip()

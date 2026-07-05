@@ -40,7 +40,8 @@ class AnthropicCompatibleProvider(BaseProvider):
             data=json.dumps(payload).encode(),
             headers={"Content-Type": "application/json",
                      "x-api-key": self.api_key,
-                     "anthropic-version": "2023-06-01"},
+                     "anthropic-version": "2023-06-01",
+                     "User-Agent": "SwarmBuild/1.0"},
         )
         timeout = float(self.card.get("timeout_seconds", 30))
         try:

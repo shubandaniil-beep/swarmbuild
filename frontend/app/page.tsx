@@ -73,7 +73,7 @@ export default function Home() {
               </Link>
             </div>
             <p className="mt-5 text-xs text-zinc-600 animate-fade-in-up delay-3">
-              100 credits = $1. После регистрации доступен один минимальный demo-запуск.
+              100 credits = $1. После регистрации доступен один минимальный trial из стартовых credits.
             </p>
           </div>
 

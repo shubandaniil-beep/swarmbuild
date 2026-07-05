@@ -25,7 +25,7 @@ export default function CreditCard({ project }: { project: Project }) {
         {estimate > 0 && <span>эквивалент: ~${(estimate / perUsd).toLocaleString("ru-RU")}</span>}
         {remaining !== null && <span>баланс: {fmt(remaining)}</span>}
         <span>{perUsd} credits = $1</span>
-        {project.demo_run && <span className="text-indigo-300">демо-запуск (без списания)</span>}
+        {project.demo_run && <span className="text-indigo-300">trial-запуск из стартовых credits</span>}
       </div>
     </div>
   );

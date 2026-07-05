@@ -66,6 +66,7 @@ const TYPES = [
   "gemini",
   "deepseek",
   "qwen",
+  "groq",
   "openrouter",
   "custom_openai",
   "mock",

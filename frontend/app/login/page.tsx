@@ -8,13 +8,14 @@ import { LogoMark } from "@/components/ui";
 
 export default function Login() {
   const router = useRouter();
-  const [mode, setMode] = useState<"login" | "register">("register");
+  const [mode, setMode] = useState<"login" | "register">("login");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
 
   async function submit() {
+    if (busy) return;
     setBusy(true);
     setError("");
     try {
@@ -26,7 +27,8 @@ export default function Login() {
       setAuth("", res.user);
       router.push("/projects");
     } catch (err) {
-      setError(String(err));
+      setError(String(err).replace(/^Error:\s*/, ""));
+    } finally {
       setBusy(false);
     }
   }
@@ -38,7 +40,7 @@ export default function Login() {
         <div className="text-center mb-8 animate-fade-in-up">
           <LogoMark size="text-2xl" />
           <p className="mt-3 text-sm text-zinc-500">
-            Зарегистрируйтесь и запустите один минимальный demo-проект без оплаты.
+            Зарегистрируйтесь и запустите один минимальный trial-проект из стартовых credits.
           </p>
         </div>
         <div className="card p-7 animate-fade-in-up delay-1">
@@ -96,7 +98,7 @@ export default function Login() {
           </div>
         </div>
         <p className="text-center text-xs text-zinc-600 mt-5 animate-fade-in-up delay-2">
-          100 credits = $1. Demo-запуск нужен только чтобы проверить качество результата.
+          100 credits = $1. Trial тратит стартовые credits и показывает реальную сборку.
         </p>
       </div>
     </div>

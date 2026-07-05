@@ -37,7 +37,7 @@ class Project(Base):
     credits_estimate: Mapped[int] = mapped_column(Integer, default=0)
     credits_spent: Mapped[int] = mapped_column(Integer, default=0)
     estimated_usd_cost: Mapped[float] = mapped_column(Numeric(10, 6), default=0)
-    demo_run: Mapped[bool] = mapped_column(Boolean, default=False)  # free trial run, no credit burn
+    demo_run: Mapped[bool] = mapped_column(Boolean, default=False)  # one-time trial slot; still burns credits
     risk_level: Mapped[str] = mapped_column(String, default="low")  # prompt-injection risk: low|medium|high
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, onupdate=now)

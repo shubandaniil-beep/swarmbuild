@@ -278,7 +278,7 @@ export default function ProjectForm() {
           </div>
           {quote.demo_eligible && (
             <p className="text-xs text-indigo-300 pt-1">
-              Demo-запуск доступен: для этого минимального проекта credits не спишутся.
+              Trial-запуск доступен: минимальный проект будет списывать стартовые credits по фазам.
             </p>
           )}
           {quote.surcharge_risk === "high" && (

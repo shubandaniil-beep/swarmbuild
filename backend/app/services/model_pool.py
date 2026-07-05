@@ -38,6 +38,7 @@ def _card(entry: ModelEntry, provider: Provider) -> dict:
         "supports_code": entry.supports_code,
         "supports_json": entry.supports_json,
         "priority": entry.priority,
+        "provider_priority": provider.priority,
         "provider_status": provider.status,
     }
 
@@ -91,19 +92,24 @@ def available_cards(db: Session, saving_mode: bool = False) -> list[dict]:
 
     real_cards.sort(key=lambda c: (
         0 if c.get("provider_status") == "active" else 1,
+        c.get("provider_priority", 100),
         c.get("priority", 100),
         c.get("display_name") or c.get("model_name") or "",
     ))
-    cards = real_cards or mock_cards
-    if saving_mode:
-        cheap = [c for c in cards if c["cost_level"] in ("low", "free")]
-        cards = cheap or cards
-    if cards:
+    if real_cards:
+        cards = real_cards
+        if saving_mode:
+            cheap = [c for c in cards if c["cost_level"] in ("low", "free")]
+            cards = cheap or cards
         return cards
     if real_calls and real_configured:
         raise RuntimeError("real model calls are enabled, but no usable real API keys are available")
     if mock_mode:
-        return [dict(c) for c in FALLBACK_MOCK_CARDS]
+        cards = mock_cards or [dict(c) for c in FALLBACK_MOCK_CARDS]
+        if saving_mode:
+            cheap = [c for c in cards if c["cost_level"] in ("low", "free")]
+            cards = cheap or cards
+        return cards
     raise RuntimeError("no enabled real model with usable API keys is configured")
 
 

@@ -142,7 +142,7 @@ Current behavior:
 
 - free user gets 100 credits and one tiny demo generation;
 - admin is not charged;
-- demo runs do not burn credits;
+- trial runs burn the starter credits like any other project;
 - non-demo phases burn fixed credits after phase completion;
 - internal provider cost is tracked separately.
 

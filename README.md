@@ -18,7 +18,7 @@ cd backend
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
-uvicorn app.main:app --reload --port 8000
+uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
 Фронтенд (Node 18+):
@@ -32,7 +32,7 @@ npm run dev
 Откройте http://localhost:3000. По умолчанию рой работает на **mock-моделях**
 (API-ключи не нужны) — pipeline проходит все фазы и собирает реальный zip.
 Курс экономики по умолчанию: **100 credits = $1**. Новый пользователь получает
-100 стартовых credits и один минимальный demo-запуск.
+100 стартовых credits для одного минимального trial-запуска.
 
 Founder/CEO admin создаётся при первом запуске:
 

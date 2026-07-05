@@ -1,6 +1,7 @@
 """Phase Orchestrator: runs the swarm through all phases (spec §7.6, §10)."""
 import json
 import re
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -18,6 +19,7 @@ from .release_policy import evaluate
 from .role_rotation import build_rotation_plan
 from .sandbox_runner import run_command
 from .settings_service import get_setting
+from ..database import SessionLocal
 
 # where each mandate's output lands on the blackboard, per phase
 PHASE_OUTPUT_FILES: dict[str, dict[str, str]] = {
@@ -233,13 +235,31 @@ def _run_phase(db: Session, project, ws: Path, phase: ProjectPhase,
 
     spent = 0.0
     outputs: dict[str, list[str]] = {}
-    for assignment in assignments:
-        if saving and assignment["mandate"] not in ("lead", "builder", "repairer",
-                                                    "judge", "packager", "reviewer"):
-            continue  # budget-saving mode: skip non-essential calls
+    runnable = [
+        assignment for assignment in assignments
+        if not (saving and assignment["mandate"] not in ("lead", "builder", "repairer",
+                                                         "judge", "packager", "reviewer"))
+    ]
+
+    parallel = bool(get_setting(db, "parallel_agent_calls"))
+    max_workers = max(1, int(get_setting(db, "max_parallel_agent_calls") or 1))
+    if parallel and len(runnable) > 1:
+        log_event(db, project.id, "phase_parallel_started",
+                  f"Phase {key}: running {len(runnable)} agents in parallel",
+                  {"phase": key, "agents": len(runnable),
+                   "max_parallel_agent_calls": max_workers}, ws)
+        results = _run_assignments_parallel(
+            project.id, key, runnable, agents, extra, min(max_workers, len(runnable)))
+    else:
+        results = []
+        for assignment in runnable:
+            agent = agents.get(assignment["model_id"])
+            result, cost = run_agent(db, ws, project, key, assignment,
+                                     agent.id if agent else "unknown", extra)
+            results.append((assignment, agent.id if agent else "unknown", result, cost))
+
+    for assignment, agent_id, result, cost in results:
         agent = agents.get(assignment["model_id"])
-        result, cost = run_agent(db, ws, project, key, assignment,
-                                 agent.id if agent else "unknown", extra)
         if agent:
             agent.current_mandate = assignment["mandate"]
         spent += cost
@@ -303,6 +323,46 @@ def _run_phase(db: Session, project, ws: Path, phase: ProjectPhase,
     db.commit()
     log_event(db, project.id, "phase_finished", f"Phase {key} finished",
               {"phase": key, "spent_usd": round(spent, 6)}, ws)
+
+
+def _run_assignments_parallel(project_id: str, phase_key: str, assignments: list[dict],
+                              agents: dict, extra: dict, max_workers: int):
+    agent_ids = {model_id: agent.id for model_id, agent in agents.items()}
+
+    def job(assignment: dict):
+        worker_db = SessionLocal()
+        try:
+            worker_project = worker_db.get(Project, project_id)
+            if not worker_project:
+                raise RuntimeError("project not found")
+            agent_id = agent_ids.get(assignment["model_id"], "unknown")
+            result, cost = run_agent(
+                worker_db, workspace_path(project_id), worker_project, phase_key,
+                assignment, agent_id, extra)
+            return assignment, agent_id, result, cost
+        finally:
+            worker_db.close()
+
+    ordered: list[tuple] = []
+    first_error: Exception | None = None
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        future_map = {executor.submit(job, assignment): assignment for assignment in assignments}
+        by_model: dict[str, tuple] = {}
+        for future in as_completed(future_map):
+            assignment = future_map[future]
+            try:
+                item = future.result()
+                by_model[assignment["model_id"]] = item
+            except Exception as exc:
+                if first_error is None:
+                    first_error = exc
+        if first_error is not None:
+            raise first_error
+    for assignment in assignments:
+        item = by_model.get(assignment["model_id"])
+        if item is not None:
+            ordered.append(item)
+    return ordered
 
 
 def _write_output_artifact(db: Session, project, ws: Path, phase_key: str,

@@ -1,4 +1,5 @@
 import os
+import re
 from urllib.parse import urlparse
 
 from fastapi import FastAPI, Request
@@ -22,10 +23,24 @@ app = FastAPI(
 # set we fall back to localhost only — never a wildcard, since credentials are
 # allowed. Auth is primarily an HttpOnly cookie, with Bearer kept only for
 # CLI/API compatibility, so a tight allowlist is required.
-_cors_env = [o.strip() for o in os.getenv("CORS_ALLOW_ORIGINS", "").split(",") if o.strip()]
-_cors_kwargs = ({"allow_origins": _cors_env} if _cors_env
-                else {"allow_origins": ["http://127.0.0.1:3000", "http://localhost:3000"]})
-_allowed_origins = set(_cors_kwargs["allow_origins"])
+_cors_env = [o.strip().rstrip("/") for o in os.getenv("CORS_ALLOW_ORIGINS", "").split(",")
+             if o.strip()]
+_local_dev_origins = ["http://127.0.0.1:3000", "http://localhost:3000"]
+_private_lan_origin_pattern = (
+    r"^http://("
+    r"10(?:\.\d{1,3}){3}|"
+    r"192\.168(?:\.\d{1,3}){2}|"
+    r"172\.(?:1[6-9]|2\d|3[0-1])(?:\.\d{1,3}){2}"
+    r"):3000$"
+)
+_cors_kwargs = (
+    {"allow_origins": _cors_env}
+    if _cors_env
+    else {"allow_origins": _local_dev_origins,
+          "allow_origin_regex": _private_lan_origin_pattern}
+)
+_allowed_origins = set(_cors_env or _local_dev_origins)
+_allowed_origin_regex = None if _cors_env else re.compile(_private_lan_origin_pattern)
 
 app.add_middleware(
     CORSMiddleware,
@@ -45,6 +60,15 @@ def _origin_from_referer(referer: str) -> str:
     return f"{parsed.scheme}://{parsed.netloc}"
 
 
+def _is_allowed_origin(origin: str) -> bool:
+    normalized = (origin or "").rstrip("/")
+    if not normalized:
+        return False
+    return normalized in _allowed_origins or bool(
+        _allowed_origin_regex and _allowed_origin_regex.match(normalized)
+    )
+
+
 @app.middleware("http")
 async def cookie_origin_guard(request: Request, call_next):
     if (request.url.path.startswith("/api/")
@@ -52,7 +76,7 @@ async def cookie_origin_guard(request: Request, call_next):
             and request.cookies.get("sb_session")):
         origin = request.headers.get("origin") or _origin_from_referer(
             request.headers.get("referer", ""))
-        if origin and origin.rstrip("/") not in _allowed_origins:
+        if origin and not _is_allowed_origin(origin):
             return JSONResponse({"detail": "origin not allowed"}, status_code=403)
         if request.headers.get("sec-fetch-site") == "cross-site":
             return JSONResponse({"detail": "cross-site request blocked"}, status_code=403)

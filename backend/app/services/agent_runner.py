@@ -227,6 +227,15 @@ def run_agent(db: Session, workspace: Path, project, phase_key: str,
                 }, ensure_ascii=False) + "\n")
             raise RuntimeError(error_message) from exc
 
+    # Real providers return prose with fenced code blocks; extract the files the
+    # agent actually wrote so build/repair output lands in repo/ instead of being
+    # discarded. Mock already fills result.files, so only parse when it's empty.
+    if (not result.files
+            and mandate in ("builder", "repairer")
+            and context.get("requires_codebase", True)):
+        from ..lib.file_extractor import extract_repo_files
+        result.files = extract_repo_files(result.text)
+
     result.text, _ = sanitize(result.text)
 
     # abuse limit: cap runaway model output

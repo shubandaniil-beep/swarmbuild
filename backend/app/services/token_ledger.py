@@ -66,8 +66,9 @@ def debit_project_tokens(db: Session, user: User, budget_usd: float,
 def authorize_project_credits(db: Session, user: User, phase_keys: list[str],
                               budget_usd: float, project_title: str) -> dict:
     """Pre-run check for the metered model: no upfront debit — credits are burned
-    per phase as work completes. Verifies the user can at least start (afford the
-    minimum estimate), and consumes a free demo run for tiny projects."""
+    per phase as work completes. Verifies the user can start, and consumes the
+    one-time trial slot for tiny projects. The trial still spends starter credits
+    as phases complete; it is not a second free balance."""
     demo_credits = int(get_setting(db, "demo_starting_credits") or 100)
     ensure_credit_columns(user, demo_credits)
     est = credit_pricing.estimate(phase_keys, budget_usd=budget_usd, db=db)
@@ -77,11 +78,19 @@ def authorize_project_credits(db: Session, user: User, phase_keys: list[str],
                 "token_balance": user.token_balance,
                 "surcharge_risk": "low"}
 
-    # Free trial run for tiny projects while a demo generation remains.
+    # Trial run for tiny projects while a demo generation remains. It spends the
+    # starter balance per phase, so the user sees honest credit accounting.
     if budget_usd <= DEMO_PROJECT_BUDGET_USD and user.demo_generations_remaining > 0:
+        if user.token_balance < est["credits_estimate"]:
+            raise HTTPException(402, {
+                "message": "not enough SwarmBuild credits for the trial project",
+                "credits_required": est["credits_estimate"],
+                "credits_estimate": est["credits_estimate"],
+                "token_balance": user.token_balance,
+            })
         user.demo_generations_remaining -= 1
         db.commit()
-        log_user_activity(db, user, "demo_run_started",
+        log_user_activity(db, user, "trial_run_started",
                           meta={"project_title": project_title, **est})
         return {"demo_run": True, "admin_bypass": False, **est,
                 "token_balance": user.token_balance, "surcharge_risk": "low"}
@@ -113,7 +122,7 @@ def charge_phase_credits(db: Session, project: Project, phase_key: str) -> dict:
     project.estimated_usd_cost = round(sum(float(c.cost_estimated_usd) for c in calls), 6)
 
     user = db.get(User, project.user_id) if project.user_id else None
-    if project.demo_run or user is None or user.role == "admin":
+    if user is None or user.role == "admin":
         db.commit()
         return {"stopped": False, "charged": 0, "demo": bool(project.demo_run),
                 "credits_spent": project.credits_spent}
