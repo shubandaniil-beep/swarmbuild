@@ -1,0 +1,55 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: swarmbuild
+      POSTGRES_PASSWORD: swarmbuild
+      POSTGRES_DB: swarmbuild
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U swarmbuild"]
+      interval: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+
+  backend:
+    build: ./backend
+    environment:
+      DATABASE_URL: postgresql+psycopg2://swarmbuild:swarmbuild@db:5432/swarmbuild
+      REDIS_URL: redis://redis:6379/0
+      STORAGE_PATH: /data/projects
+      ENCRYPTION_SECRET: ${ENCRYPTION_SECRET:-change-me-to-a-long-random-string}
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-founder@swarmbuild.ai}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-replace-with-a-long-unique-founder-password}
+      DEFAULT_MODEL_PROVIDER: ${DEFAULT_MODEL_PROVIDER:-mock}
+      ENABLE_REAL_MODEL_CALLS: ${ENABLE_REAL_MODEL_CALLS:-false}
+      TELEGRAM_PAYMENT_BOT_URL: ${TELEGRAM_PAYMENT_BOT_URL:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+      QWEN_API_KEY: ${QWEN_API_KEY:-}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+    volumes:
+      - projects:/data/projects
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+
+  frontend:
+    build: ./frontend
+    environment:
+      NEXT_PUBLIC_API_URL: http://localhost:8000
+    ports:
+      - "3000:3000"
+    depends_on:
+      - backend
+
+volumes:
+  pgdata:
+  projects:
