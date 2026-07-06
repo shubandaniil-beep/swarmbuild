@@ -1,0 +1,28 @@
+[project]
+name = "swarmbuild-backend"
+version = "0.1.0"
+description = "SwarmBuild AI — rotating swarm project factory (FastAPI backend)"
+requires-python = ">=3.11"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+extend-exclude = ["scripts"]
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "F",   # pyflakes (unused imports, undefined names)
+    "I",   # import sorting
+    "B",   # bugbear (likely bugs)
+    "UP",  # pyupgrade (modern syntax)
+]
+ignore = [
+    "E501", # long lines: line-length is advisory for strings/URLs
+    "B008", # FastAPI Depends(...) in defaults is the framework idiom
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+filterwarnings = ["ignore::DeprecationWarning"]

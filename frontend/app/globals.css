@@ -1,0 +1,216 @@
+@import "tailwindcss";
+
+/* Manrope / JetBrains Mono загружаются через next/font (layout.tsx). */
+@theme {
+  --font-sans: var(--font-sans-loaded), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-mono-loaded), ui-monospace, "SF Mono", monospace;
+}
+
+/* ============ design tokens ============
+   Тёмный футуристичный dashboard: чёрный/графитовый фон, плотные приподнятые
+   поверхности и единственный янтарный акцент в уверенных дозах. */
+
+:root {
+  --bg: #09090a;
+  --bg-raised: #141416;
+  --border: #29292e;
+  --border-hover: #4a4a50;
+  --accent: #f59e0b;        /* amber-500 — основной акцент */
+  --accent-bright: #fbbf24; /* amber-400 — hover / подсветки */
+  --accent-soft: rgba(245, 158, 11, 0.14);
+  --glow: rgba(245, 158, 11, 0.30);
+}
+
+body {
+  @apply bg-zinc-950 text-zinc-50 antialiased font-sans;
+  background-color: var(--bg);
+}
+
+/* Цифры в один строй там, где они соревнуются (баланс, статистика, таблицы). */
+.tabular { font-variant-numeric: tabular-nums; }
+
+/* Янтарное свечение фона: fixed-слой вместо background-attachment: fixed —
+   тот глючит на iOS Safari и при скрине/скролле с композитингом. */
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background:
+    radial-gradient(ellipse 85% 55% at 50% -20%, rgba(245, 158, 11, 0.12), transparent 68%),
+    radial-gradient(ellipse 60% 45% at 92% 118%, rgba(245, 158, 11, 0.06), transparent 70%);
+}
+
+::selection { background: rgba(245, 158, 11, 0.4); color: #fff; }
+
+/* blueprint-сетка для hero / фичевых секций */
+.grid-bg {
+  background-image:
+    linear-gradient(rgba(245, 158, 11, 0.05) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(245, 158, 11, 0.05) 1px, transparent 1px);
+  background-size: 46px 46px;
+  mask-image: radial-gradient(ellipse 78% 72% at 50% 30%, black 32%, transparent 76%);
+}
+
+/* ============ animations ============ */
+
+@keyframes fade-in-up {
+  from { opacity: 0; transform: translateY(14px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; box-shadow: 0 0 0 0 rgba(245, 158, 11, 0.55); }
+  50% { opacity: 0.65; box-shadow: 0 0 0 8px rgba(245, 158, 11, 0); }
+}
+@keyframes glow-breathe {
+  0%, 100% { box-shadow: 0 0 26px rgba(245, 158, 11, 0.13), inset 0 0 0 1px rgba(245, 158, 11, 0.26); }
+  50% { box-shadow: 0 0 48px rgba(245, 158, 11, 0.28), inset 0 0 0 1px rgba(245, 158, 11, 0.42); }
+}
+@keyframes shimmer {
+  0% { background-position: -400px 0; }
+  100% { background-position: 400px 0; }
+}
+@keyframes ticker {
+  0% { transform: translateY(0); }
+  100% { transform: translateY(-50%); }
+}
+
+.animate-fade-in-up { animation: fade-in-up 0.5s cubic-bezier(0.16, 1, 0.3, 1) both; }
+.delay-1 { animation-delay: 0.07s; }
+.delay-2 { animation-delay: 0.14s; }
+.delay-3 { animation-delay: 0.21s; }
+.animate-pulse-dot { animation: pulse-dot 1.5s ease-in-out infinite; }
+.animate-ticker { animation: ticker 16s linear infinite; }
+
+@layer components {
+  .skeleton {
+    @apply rounded-lg bg-zinc-900;
+    background-image: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.05), transparent);
+    background-size: 400px 100%;
+    animation: shimmer 1.4s infinite linear;
+  }
+}
+
+/* ============ surfaces ============ */
+
+@layer components {
+
+
+  .card {
+    border: 1px solid var(--border);
+    border-radius: 1rem;
+    background: var(--bg-raised);
+    transition: border-color 0.2s ease, box-shadow 0.25s ease, transform 0.2s ease;
+  }
+  .card-hover:hover {
+    border-color: var(--accent);
+    transform: translateY(-3px);
+    box-shadow: 0 12px 40px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(245, 158, 11, 0.30);
+  }
+  .card-glow {
+    border: 1px solid rgba(245, 158, 11, 0.38);
+    border-radius: 1rem;
+    background: linear-gradient(155deg, rgba(245, 158, 11, 0.10), rgba(20, 20, 22, 0.92) 42%);
+    animation: glow-breathe 3.6s ease-in-out infinite;
+  }
+  .glass {
+    background: rgba(9, 9, 10, 0.82);
+    backdrop-filter: blur(16px);
+    border-bottom: 1px solid var(--border);
+  }
+
+  /* ============ controls ============
+     Уверенные контролы: плотная заливка, тяжёлый вес, решительные тени.
+     На янтарной заливке текст всегда тёмный — ради контраста. */
+
+  .btn-primary {
+    @apply inline-flex items-center justify-center gap-2 text-zinc-950 font-bold
+      rounded-xl tracking-tight transition-all duration-200 select-none;
+    background: var(--accent);
+    box-shadow: 0 6px 20px var(--glow), inset 0 1px 0 rgba(255, 255, 255, 0.35);
+  }
+  .btn-primary:hover {
+    background: var(--accent-bright);
+    box-shadow: 0 8px 30px rgba(245, 158, 11, 0.45), inset 0 1px 0 rgba(255, 255, 255, 0.4);
+    transform: translateY(-2px);
+  }
+  .btn-primary:active { transform: translateY(0); }
+  .btn-primary:disabled { @apply opacity-50; transform: none; }
+
+  .btn-ghost {
+    @apply inline-flex items-center justify-center gap-2 border-2 rounded-xl
+      font-semibold text-zinc-200 transition-all duration-200 select-none;
+    border-color: var(--border);
+    background: rgba(24, 24, 27, 0.4);
+  }
+  .btn-ghost:hover {
+    @apply text-white;
+    border-color: var(--accent);
+    background: var(--accent-soft);
+  }
+
+  .input {
+    @apply w-full bg-zinc-900/80 border-2 rounded-xl px-3.5 py-2.5 text-sm
+      text-zinc-50 placeholder-zinc-500 transition-colors duration-200;
+    border-color: var(--border);
+  }
+  .input:focus {
+    @apply outline-none;
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px rgba(245, 158, 11, 0.18);
+  }
+
+  .chip {
+    @apply inline-flex items-center gap-1.5 text-xs font-medium px-2.5 py-1 rounded-md
+      bg-zinc-800 text-zinc-300;
+  }
+  .chip-accent {
+    background: var(--accent-soft);
+    @apply text-amber-300 font-semibold;
+  }
+
+  /* ============ typography ============ */
+
+  .kicker {
+    @apply text-[11px] font-bold uppercase tracking-[0.24em] text-amber-400;
+  }
+  .section-title { @apply text-3xl sm:text-4xl font-extrabold tracking-tight; }
+  .hero-gradient-text {
+    background: linear-gradient(100deg, #fbbf24 10%, #fde68a 48%, #f59e0b 88%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+
+  /* ============ tables (admin + lists) ============ */
+
+  main table { @apply w-full text-sm border-separate; border-spacing: 0; }
+  main thead th {
+    @apply text-left text-[11px] font-bold uppercase tracking-wider text-zinc-500
+      border-b border-zinc-800 pb-2.5 pt-1 px-3;
+  }
+  main tbody td { @apply border-b border-zinc-800/60 py-3 px-3 align-middle; }
+  main tbody tr { transition: background 0.15s ease; }
+  main tbody tr:hover { background: rgba(245, 158, 11, 0.05); }
+
+  /* ============ misc ============ */
+
+  .log-scroll::-webkit-scrollbar { width: 6px; }
+  .log-scroll::-webkit-scrollbar-thumb { background: #4a4a50; border-radius: 3px; }
+
+  .empty-state {
+    @apply flex flex-col items-center justify-center text-center py-16 px-8;
+    border: 1px solid var(--border);
+    border-radius: 1rem;
+    background: var(--bg-raised);
+  }
+
+  .terminal {
+    @apply rounded-2xl border border-zinc-800 bg-zinc-950/95 font-mono text-xs
+      overflow-hidden shadow-2xl;
+    box-shadow: 0 24px 80px rgba(0, 0, 0, 0.7), 0 0 44px rgba(245, 158, 11, 0.08);
+  }
+  .terminal-bar { @apply flex items-center gap-1.5 px-4 py-3 border-b border-zinc-800/80 bg-zinc-900/70; }
+
+}

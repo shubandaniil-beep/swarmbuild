@@ -1,0 +1,16 @@
+.venv/
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+*.pyc
+node_modules/
+.next/
+.env
+.secret
+.founder-password
+*.db
+backend/data/
+.DS_Store
+tsconfig.tsbuildinfo
+.env.local
+backend/swarmbuild.db
