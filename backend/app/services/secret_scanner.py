@@ -3,7 +3,14 @@
 Walks the repo/artifacts, redacts any real secret in place (replacing with a
 placeholder), converts a real `.env` into `.env.example`, and returns a findings
 summary that feeds the security report and artifact safety status.
+
+Redaction must remove secrets WITHOUT corrupting code: the redactor keeps
+literals quoted and leaves env-reading expressions alone, and this module
+verifies every previously-parseable ``.py`` file still parses after redaction —
+a file broken by redaction is recorded so the release gates (which run on the
+final tree) block the archive instead of shipping it silently.
 """
+import ast
 from pathlib import Path
 
 from ..lib.redact import redact
@@ -28,11 +35,20 @@ def _is_scannable(f: Path) -> bool:
         return False
 
 
+def _parses(source: str) -> bool:
+    try:
+        ast.parse(source)
+        return True
+    except (SyntaxError, ValueError):
+        return False
+
+
 def scan_and_redact(workspace: Path) -> dict:
     """Redact secrets across the shippable tree. Returns a findings summary."""
     roots = [workspace / "repo", workspace / "artifacts"]
     findings: list[dict] = []
     labels: set[str] = set()
+    syntax_broken: list[str] = []
     files_scanned = 0
     files_redacted = 0
 
@@ -55,6 +71,11 @@ def scan_and_redact(workspace: Path) -> dict:
                 if cleaned != original:
                     f.write_text(cleaned)
                     files_redacted += 1
+                    # never trade a secret leak for silently-shipped broken code:
+                    # the secret stays removed, but the corruption is recorded so
+                    # the final-tree gates block the release and repair can fix it.
+                    if f.suffix == ".py" and _parses(original) and not _parses(cleaned):
+                        syntax_broken.append(rel)
             # A shipped project must never carry a real `.env` — move its
             # (already-redacted) content to `.env.example` and drop the
             # original, regardless of whether a secret was actually found in
@@ -70,5 +91,6 @@ def scan_and_redact(workspace: Path) -> dict:
         "files_redacted": files_redacted,
         "secret_types": sorted(labels),
         "findings": findings,
+        "syntax_broken_by_redaction": syntax_broken,
         "clean": not findings,
     }

@@ -21,6 +21,13 @@ export interface Project {
   credits_remaining?: number | null;
   credits_per_usd?: number;
   demo_run?: boolean;
+  billing_mode?: "client" | "admin_bypass" | "client_simulation" | "missing_owner" | string;
+  client_billing_enabled?: boolean;
+  zero_credit_reason?: string;
+  billing_note?: string;
+  // release gate: only a released, ready project may be downloaded by a client.
+  downloadable?: boolean;
+  release_decision?: string | null;
   budget: BudgetState | null;
   created_at: string | null;
 }

@@ -55,14 +55,14 @@ function ProjectsContent() {
 
   const ready = projects.filter((p) => p.status === "ready").length;
   const running = projects.filter((p) =>
-    ["running", "queued", "packaging", "accepted"].includes(p.status)).length;
+    ["running", "queued", "packaging", "accepted", "repairing"].includes(p.status)).length;
   const spentCredits = projects.reduce((s, p) => s + (p.credits_spent || 0), 0);
 
   const shown = projects.filter((p) => {
     if (filter === "all") return true;
     if (filter.startsWith("mode:")) return p.project_mode === filter.slice(5);
     if (filter === "running")
-      return ["running", "queued", "packaging", "accepted"].includes(p.status);
+      return ["running", "queued", "packaging", "accepted", "repairing"].includes(p.status);
     return p.status === filter;
   });
 
@@ -127,7 +127,7 @@ function ProjectsContent() {
                 <span className="ml-auto flex gap-2">
                   <Link href={`/projects/${p.project_id}`}
                         className="btn-ghost px-3 py-1.5">Открыть</Link>
-                  {(p.status === "ready" || p.status === "partial_ready") && (
+                  {p.downloadable && (
                     <a href={downloadUrl(`/api/projects/${p.project_id}/download`)}
                        className="btn-ghost px-3 py-1.5"><Icon name="download" size={13} /> ZIP</a>
                   )}

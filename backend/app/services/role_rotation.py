@@ -23,6 +23,13 @@ PHASE_MANDATES: dict[str, list[str]] = {
 }
 
 
+def _route(card: dict) -> tuple:
+    """The real model identity. Virtual swarm slots (`<id>_v2`) share a route,
+    so independence checks MUST compare routes: a model reviewing its own work
+    through a duplicated slot is still reviewing its own work."""
+    return (card.get("provider_id"), card.get("model_name"))
+
+
 def build_rotation_plan(phases: list[str], pool: list[dict]) -> list[dict]:
     """Assign mandates for every phase, rotating the agent order each phase."""
     n = len(pool)
@@ -42,14 +49,32 @@ def build_rotation_plan(phases: list[str], pool: list[dict]) -> list[dict]:
                         order[li], order[j] = order[j], order[li]
                         break
 
-        # rule: judge must differ from lead
-        if "lead" in mandates and "judge" in mandates:
-            li, ji = mandates.index("lead"), mandates.index("judge")
-            if order[li]["id"] == order[ji]["id"]:
+        # rule: independent cross-checking — the judge and the first reviewer
+        # must be a DIFFERENT real model than the phase author (lead, else
+        # builder) whenever the pool actually contains another route.
+        author_idx = None
+        if "lead" in mandates:
+            author_idx = mandates.index("lead")
+        elif "builder" in mandates:
+            author_idx = mandates.index("builder")
+        if author_idx is not None:
+            author_route = _route(order[author_idx])
+            for mi, mandate in enumerate(mandates):
+                if mandate not in ("judge", "reviewer"):
+                    continue
+                if _route(order[mi]) != author_route:
+                    continue
                 for j in range(len(order)):
-                    if j not in (li, ji) and order[j]["id"] != order[li]["id"]:
-                        order[ji], order[j] = order[j], order[ji]
-                        break
+                    if j in (author_idx, mi):
+                        continue
+                    if _route(order[j]) == author_route:
+                        continue
+                    # don't fix one checker by breaking another checker slot
+                    if j < len(mandates) and mandates[j] in ("judge", "reviewer") \
+                            and _route(order[mi]) == author_route:
+                        continue
+                    order[mi], order[j] = order[j], order[mi]
+                    break
 
         assignments = []
         new_streak = {c["id"]: 0 for c in pool}

@@ -39,6 +39,14 @@ DEFAULTS: dict[str, object] = {
     "provider_retry_max_wait_seconds": 70,
     "parallel_agent_calls": True,
     "max_parallel_agent_calls": 4,
+    # single cheap model left → decompose the build into plan/file/check/repair
+    # micro-tasks instead of asking it for the whole project in one pass
+    "enable_micro_build": True,
+    # coordinator/integrator layer: one binding file plan before builders run,
+    # and an LLM integrator resolving duplicates the deterministic pass reports
+    "enable_integration_plan": True,
+    "enable_llm_integrator": True,
+    "max_repo_files": 40,  # file budget for the deliverable repo
     "max_login_attempts": 8,
     "login_window_minutes": 15,
     "trust_proxy_headers": False,

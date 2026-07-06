@@ -17,6 +17,12 @@ interface Stats {
   outstanding_credits: number;
   credits_spent_usd_value: number;
   gross_margin_usd: number;
+  admin_bypass_projects: number;
+  client_billed_projects: number;
+  client_simulation_projects: number;
+  client_zero_credit_projects: number;
+  released_zero_credit_projects: number;
+  zero_credit_status: string;
   topups_pending: number;
   topups_paid_usd: number;
   users_total: number;
@@ -77,6 +83,23 @@ export default function AdminDashboard() {
           <StatCard label="USD value списанных credits" value={`$${stats.credits_spent_usd_value}`} tone="green" />
           <StatCard label="gross margin estimate" value={`$${stats.gross_margin_usd}`} tone={stats.gross_margin_usd >= 0 ? "green" : "red"} />
         </div>
+      </section>
+
+      <section>
+        <p className="kicker mb-3">Почему списано 0</p>
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          <StatCard label="client-billed projects" value={stats.client_billed_projects} tone="green" />
+          <StatCard label="admin bypass projects" value={stats.admin_bypass_projects} tone={stats.admin_bypass_projects ? "accent" : "zinc"} />
+          <StatCard label="client simulation tests" value={stats.client_simulation_projects} />
+          <StatCard label="released client 0 credits" value={stats.released_zero_credit_projects} tone={stats.released_zero_credit_projects ? "red" : "zinc"} />
+        </div>
+        <p className={stats.zero_credit_status === "billing_error" ? "mt-3 text-sm text-red-300" : "mt-3 text-sm text-zinc-500"}>
+          {stats.zero_credit_status === "billing_error"
+            ? "Есть релизованный клиентский проект с 0 credits: это billing anomaly, нужно проверить."
+            : stats.zero_credit_status === "admin_bypass_only"
+              ? "0 credits объясняется founder/admin bypass, клиентские списания не сломаны."
+              : "Критичных zero-credit billing anomalies не найдено."}
+        </p>
       </section>
 
       <section>

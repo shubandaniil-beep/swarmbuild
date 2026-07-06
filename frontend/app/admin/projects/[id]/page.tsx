@@ -11,7 +11,7 @@ import ArtifactCard from "@/components/ArtifactCard";
 import BudgetCard from "@/components/BudgetCard";
 import { PageLoader, SectionHeader, StatCard } from "@/components/ui";
 
-const ACTIVE = ["accepted", "queued", "running", "packaging"];
+const ACTIVE = ["accepted", "queued", "running", "packaging", "repairing"];
 
 type JsonlEvent = {
   type: string;
@@ -206,6 +206,8 @@ function MonitorContent({ id }: { id: string }) {
         <StatCard value={calls.length.toString()} label="Вызовы модели" />
         <StatCard value={commandRuns.length.toString()} label="Команды" />
         <StatCard value={`$${project.budget_usd.toFixed(2)}`} label="Бюджет" />
+        <StatCard value={project.billing_mode || "client"} label="Billing mode" />
+        <StatCard value={project.zero_credit_reason || "—"} label="0-credit reason" />
       </div>
 
       {project.budget && <BudgetCard budget={project.budget} />}

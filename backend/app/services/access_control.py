@@ -14,6 +14,10 @@ ACCESS_BY_MANDATE: dict[str, list[str]] = {
     "judge": ["read_brief", "read_spec", "read_repo", "read_logs", "write_review"],
     "packager": ["read_brief", "read_spec", "read_repo", "read_logs",
                  "write_artifacts", "package_release"],
+    # final coordinator: merges/deduplicates the build agents' material into
+    # one coherent tree — full repo write, no packaging rights
+    "integrator": ["read_brief", "read_spec", "read_repo", "write_repo_branch",
+                   "read_logs", "write_review"],
 }
 
 

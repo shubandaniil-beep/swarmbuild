@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, Numeric, String
+from sqlalchemy import JSON, Boolean, DateTime, Integer, Numeric, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from ..database import Base
@@ -19,3 +19,10 @@ class ProjectPhase(Base):
     budget_limit_usd: Mapped[float] = mapped_column(Numeric(10, 2), default=0)
     spent_estimated_usd: Mapped[float] = mapped_column(Numeric(10, 4), default=0)
     decision: Mapped[str | None] = mapped_column(String, nullable=True)
+    # Honest progress accounting (spec §7.7): an LLM call is not progress. A phase
+    # only "made progress" when it produced parsed files / substantive artifacts /
+    # passed checks / closed open tasks. Credits are charged only when it did.
+    made_progress: Mapped[bool] = mapped_column(Boolean, default=False)
+    progress_proof: Mapped[dict] = mapped_column(JSON, default=dict)
+    gate_results: Mapped[dict] = mapped_column(JSON, default=dict)
+    credits_charged: Mapped[int] = mapped_column(Integer, default=0)

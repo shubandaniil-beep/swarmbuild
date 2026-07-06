@@ -16,8 +16,10 @@ from ..lib.redact import redact_error, redact_text
 from ..models import (
     AgentCall,
     CreditTopup,
+    Issue,
     ModelEntry,
     Project,
+    ProjectPhase,
     ProjectType,
     Provider,
     ProviderKey,
@@ -30,6 +32,7 @@ from ..services import credit_pricing, key_pool
 from ..services.artifact_packager import package
 from ..services.project_intake import workspace_path
 from ..services.settings_service import all_settings, get_setting, set_setting
+from ..services.token_ledger import billing_mode_for, uses_client_billing
 from ..services.user_activity import log_user_activity
 from ..workers.project_worker import enqueue
 from .deps import require_admin
@@ -48,6 +51,28 @@ def _audit(db: Session, admin: User, action: str, **meta) -> None:
 @router.get("/dashboard")
 def dashboard(db: Session = Depends(get_db)):
     projects = db.query(Project).filter(Project.deleted.is_(False))
+    project_rows = projects.all()
+    owner_ids = {p.user_id for p in project_rows if p.user_id}
+    owners = {}
+    if owner_ids:
+        owners = {u.id: u for u in db.query(User).filter(User.id.in_(owner_ids)).all()}
+    billing_modes = {p.id: billing_mode_for(p, owners.get(p.user_id)) for p in project_rows}
+    admin_bypass_projects = sum(1 for p in project_rows if billing_modes[p.id] == "admin_bypass")
+    client_simulation_projects = sum(1 for p in project_rows if billing_modes[p.id] == "client_simulation")
+    client_billed_projects = sum(1 for p in project_rows if billing_modes[p.id] in {"client", "client_simulation"})
+    client_zero_credit_projects = sum(
+        1 for p in project_rows
+        if billing_modes[p.id] in {"client", "client_simulation"}
+        and int(p.credits_spent or 0) == 0
+        and p.status not in {"accepted", "queued", "running", "packaging", "repairing", "cancelled"}
+    )
+    released_zero_credit_projects = sum(
+        1 for p in project_rows
+        if billing_modes[p.id] in {"client", "client_simulation"}
+        and int(p.credits_spent or 0) == 0
+        and p.status == "ready"
+        and p.release_decision == "release"
+    )
     by_status = dict(db.query(Project.status, func.count())
                      .filter(Project.deleted.is_(False)).group_by(Project.status).all())
     total_spend = db.query(func.sum(AgentCall.cost_estimated_usd)).scalar() or 0
@@ -59,7 +84,7 @@ def dashboard(db: Session = Depends(get_db)):
         CreditTopup.status == "paid").scalar() or 0
     credits_spent_usd = credit_pricing.credits_to_usd(db, credits_spent)
     return {
-        "projects_total": projects.count(),
+        "projects_total": len(project_rows),
         "projects_ready": by_status.get("ready", 0),
         "projects_partial_ready": by_status.get("partial_ready", 0),
         "projects_failed": by_status.get("failed", 0),
@@ -71,6 +96,18 @@ def dashboard(db: Session = Depends(get_db)):
         "outstanding_credits": int(outstanding_credits),
         "credits_spent_usd_value": credits_spent_usd,
         "gross_margin_usd": round(credits_spent_usd - float(total_spend), 6),
+        "admin_bypass_projects": admin_bypass_projects,
+        "client_billed_projects": client_billed_projects,
+        "client_simulation_projects": client_simulation_projects,
+        "client_zero_credit_projects": client_zero_credit_projects,
+        "released_zero_credit_projects": released_zero_credit_projects,
+        "zero_credit_status": (
+            "billing_error"
+            if released_zero_credit_projects else
+            "admin_bypass_only"
+            if admin_bypass_projects and not client_zero_credit_projects else
+            "ok"
+        ),
         "topups_pending": topups_pending,
         "topups_paid_usd": round(float(topups_paid_usd), 2),
         "users_total": db.query(User).count(),
@@ -92,8 +129,81 @@ def all_projects(db: Session = Depends(get_db)):
         "status": p.status, "budget_usd": float(p.budget_usd),
         "project_type": p.project_type, "project_mode": p.project_mode,
         "current_phase": p.current_phase,
+        "release_decision": p.release_decision,
+        "not_released_reason": p.not_released_reason or "",
+        "credits_spent": p.credits_spent,
         "created_at": p.created_at.isoformat() if p.created_at else None,
     } for p, u in rows]
+
+
+@router.get("/projects/{project_id}/integrity")
+def project_integrity(project_id: str, db: Session = Depends(get_db)):
+    """Founder-only honest picture of a project: token spend, per-phase progress
+    proof, deterministic gate failures, and exactly why (if) it was not released
+    to the client (spec §7.7–7.10)."""
+    project = _project_or_404(db, project_id)
+    ws = workspace_path(project_id)
+    phases = (db.query(ProjectPhase)
+              .filter(ProjectPhase.project_id == project_id).all())
+    calls = db.query(AgentCall).filter(AgentCall.project_id == project_id).all()
+    real_calls = [c for c in calls if c.status != "provider_error"]
+    usd_spend = round(sum(float(c.cost_estimated_usd) for c in calls), 6)
+    owner = db.get(User, project.user_id) if project.user_id else None
+    billing_mode = billing_mode_for(project, owner)
+
+    release = {}
+    rel_path = ws / "reviews" / "release-decision.json"
+    if rel_path.exists():
+        try:
+            release = json.loads(rel_path.read_text())
+        except (OSError, json.JSONDecodeError):
+            release = {}
+
+    open_issues = db.query(Issue).filter(Issue.project_id == project_id,
+                                         Issue.status == "open").all()
+    gate_issues = [i for i in open_issues if i.title.startswith("GATE-")]
+
+    return {
+        "project_id": project.id,
+        "status": project.status,
+        "release_decision": project.release_decision,
+        "released_to_client": project.status == "ready" and project.release_decision == "release",
+        "not_released_reason": project.not_released_reason or "",
+        "token_spend": {
+            "usd_cost_estimated": usd_spend,
+            "credits_spent": project.credits_spent,
+            "credits_spent_usd_value": credit_pricing.credits_to_usd(db, project.credits_spent),
+            "billing_mode": billing_mode,
+            "client_billing_enabled": uses_client_billing(project, owner),
+            "zero_credit_reason": (
+                "client_credits_charged" if int(project.credits_spent or 0) > 0
+                else "admin_bypass" if billing_mode == "admin_bypass"
+                else "billing_error_candidate" if project.status == "ready" and project.release_decision == "release"
+                else "no_client_charge_yet"
+            ),
+            "agent_calls_total": len(calls),
+            "agent_calls_failed": len(calls) - len(real_calls),
+        },
+        "progress_proof": [{
+            "phase_key": ph.phase_key,
+            "status": ph.status,
+            "made_progress": bool(ph.made_progress),
+            "credits_charged": ph.credits_charged or 0,
+            "zero_charge_reason": (
+                "client_credits_charged" if (ph.credits_charged or 0) > 0
+                else "admin_bypass" if billing_mode == "admin_bypass"
+                else "no_chargeable_progress" if not ph.made_progress
+                else "not_charged_yet" if ph.status != "done"
+                else "billing_error_candidate"
+            ),
+            "proof": ph.progress_proof or {},
+        } for ph in phases],
+        "gate_failures": release.get("gate_failures", []),
+        "gates": release.get("gates", {}),
+        "open_gate_issues": [{"title": i.title, "severity": i.severity,
+                              "description": i.description} for i in gate_issues],
+        "notes": release.get("notes", []),
+    }
 
 
 def _project_or_404(db: Session, project_id: str) -> Project:
@@ -150,7 +260,11 @@ def rerun(project_id: str, db: Session = Depends(get_db),
 def force_package(project_id: str, db: Session = Depends(get_db)):
     project = _project_or_404(db, project_id)
     _, decision = package(db, project, workspace_path(project_id))
-    project.status = "partial_ready" if decision["decision"] != "release" else "ready"
+    project.release_decision = decision["decision"]
+    project.status = "ready" if decision["decision"] == "release" else "partial_ready"
+    if decision["decision"] != "release":
+        project.not_released_reason = ("not released: "
+                                       + "; ".join(decision.get("notes", [])[:6]))
     db.commit()
     return {"status": project.status, "decision": decision}
 
@@ -162,6 +276,14 @@ def set_status(project_id: str, body: dict, db: Session = Depends(get_db)):
     if status not in ("ready", "partial_ready", "failed", "cancelled", "draft"):
         raise HTTPException(400, "unsupported status")
     project.status = status
+    # Keep the release gate consistent with an explicit founder override so a
+    # manually-set "ready" is actually downloadable (and only then).
+    if status == "ready":
+        project.release_decision = "release"
+        project.not_released_reason = ""
+    elif status == "partial_ready":
+        project.release_decision = "partial_release"
+        project.not_released_reason = "manually set to partial by admin"
     db.commit()
     return {"status": status}
 
@@ -456,6 +578,24 @@ def delete_key(provider_id: str, key_id: str, db: Session = Depends(get_db),
     db.commit()
     _audit(db, admin, "provider_key_deleted", provider_id=provider_id, key_id=key_id)
     return {"deleted": key_id}
+
+
+@router.post("/providers/{provider_id}/sync-models")
+def sync_provider_models(provider_id: str, db: Session = Depends(get_db),
+                         admin: User = Depends(require_admin)):
+    """Reconcile the model registry with the provider's live catalog (prices,
+    deprecations, context windows). Currently supported for Groq."""
+    from ..services.model_catalog import sync_provider_models as run_sync
+    p = db.get(Provider, provider_id)
+    if not p:
+        raise HTTPException(404, "provider not found")
+    try:
+        summary = run_sync(db, p)
+    except RuntimeError as e:
+        raise HTTPException(400, redact_error(e)[:300]) from e
+    _audit(db, admin, "provider_models_synced", provider_id=provider_id,
+           summary={k: v for k, v in summary.items() if k != "provider"})
+    return summary
 
 
 @router.post("/providers/{provider_id}/test")

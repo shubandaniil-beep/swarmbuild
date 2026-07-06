@@ -15,7 +15,7 @@ import { PageLoader } from "@/components/ui";
 import { Icon, IconTile, type IconName } from "@/components/icons";
 import RequireAuth from "@/components/RequireAuth";
 
-const ACTIVE = ["accepted", "queued", "running", "packaging"];
+const ACTIVE = ["accepted", "queued", "running", "packaging", "repairing"];
 
 const NEXT_IMPROVEMENTS = [
   { id: "deploy-guide", title: "Задеплоить проект", action: "Deploy guide", credits: 800, icon: "rocket", detail: "План запуска и понятные шаги публикации" },
@@ -34,7 +34,7 @@ const OUTPUT_LABELS: Record<string, string> = {
   mvp: "MVP / файлы проекта", docs: "документация", business_plan: "бизнес-план", pitch_outline: "pitch outline", presentation_structure: "структура презентации", research_report: "исследование", technical_spec: "спецификация", marketing_plan: "маркетинг-план", financial_model: "финмодель", deployment_guide: "инструкция запуска", user_manual: "инструкция пользователя", roadmap: "roadmap", branding_copy: "тексты / брендинг",
 };
 const STATUS_LABELS: Record<string, string> = {
-  accepted: "принят", queued: "в очереди", running: "в работе", packaging: "упаковывается", ready: "готов", partial_ready: "готов с ограничениями", failed: "ошибка", needs_topup: "нужно пополнить кредиты", needs_provider: "AI-модели временно недоступны", cancelled: "отменён",
+  accepted: "принят", queued: "в очереди", running: "в работе", packaging: "упаковывается", repairing: "исправление замечаний", needs_internal_repair: "на внутренней доработке", provider_config_error: "AI-модели не настроены", ready: "готов", partial_ready: "готов с ограничениями", failed: "ошибка", needs_topup: "нужно пополнить кредиты", needs_provider: "AI-модели временно недоступны", cancelled: "отменён",
 };
 
 function label(map: Record<string, string>, value?: string | null) { if (!value) return "авто"; return map[value] || value.replaceAll("_", " "); }
@@ -94,7 +94,7 @@ function ProjectContent({ id }: { id: string }) {
     }
     load();
     return () => { stop = true; };
-  }, [id, reloadKey]);
+  }, [id, reloadKey, limitations]);
 
   async function restartProject() {
     setBusyAction("restart");
@@ -213,9 +213,11 @@ function ProjectContent({ id }: { id: string }) {
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
             {finals.map((a) => (<ArtifactCard key={a.id} projectId={id} artifact={a} />))}
           </div>
-          <div className="mt-4 flex gap-3">
+          <div className="mt-4 flex gap-3 items-center">
             <Link href={`/projects/${id}/artifacts`} className="btn-ghost px-5 py-2 text-sm">Все финальные файлы →</Link>
-            {(done || project.status === "needs_topup") && (<a href={downloadUrl(`/api/projects/${id}/download`)} className="btn-primary px-5 py-2 text-sm"><Icon name="download" size={14} /> project.zip</a>)}
+            {project.downloadable
+              ? (<a href={downloadUrl(`/api/projects/${id}/download`)} className="btn-primary px-5 py-2 text-sm"><Icon name="download" size={14} /> project.zip</a>)
+              : (<span className="text-xs text-amber-300/90">Итоговый архив станет доступен, когда проект пройдёт проверку готовности.</span>)}
           </div>
         </div>
       )}
