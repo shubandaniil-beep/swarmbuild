@@ -9,7 +9,8 @@ from sqlalchemy.orm import Session
 from ..models import ModelEntry, Provider
 from .settings_service import get_setting
 
-ALL_MANDATES = ["lead", "critic", "builder", "reviewer", "repairer", "judge", "packager"]
+ALL_MANDATES = ["lead", "critic", "builder", "reviewer", "repairer", "judge",
+                "packager", "integrator"]
 
 # legacy fallback used only when the registry is empty/unavailable
 FALLBACK_MOCK_CARDS = [
@@ -51,6 +52,7 @@ def _runtime_card(db: Session, entry: ModelEntry, provider: Provider) -> dict:
     timeout = int(get_setting(db, "provider_call_timeout_seconds") or 0)
     if timeout > 0:
         card["timeout_seconds"] = timeout
+    card["allow_private_provider_urls"] = bool(get_setting(db, "allow_private_provider_urls"))
     if provider.provider_type == "openrouter":
         card["http_referer"] = str(get_setting(db, "openrouter_http_referer") or "").strip()
         card["app_title"] = str(get_setting(db, "openrouter_app_title") or "").strip()
@@ -90,10 +92,15 @@ def available_cards(db: Session, saving_mode: bool = False) -> list[dict]:
         pinned = [c for c in real_cards if c["model_name"] == default_model]
         real_cards = pinned or real_cards
 
+    # Prefer active providers and admin-set priority first; among otherwise-equal
+    # models prefer the STRONGER tier (high>medium>low>free) so the swarm pool is
+    # stacked with the most capable models available before weaker ones.
+    _tier = {"high": 0, "medium": 1, "low": 2, "free": 3}
     real_cards.sort(key=lambda c: (
         0 if c.get("provider_status") == "active" else 1,
         c.get("provider_priority", 100),
         c.get("priority", 100),
+        _tier.get(str(c.get("cost_level") or "").lower(), 2),
         c.get("display_name") or c.get("model_name") or "",
     ))
     if real_cards:

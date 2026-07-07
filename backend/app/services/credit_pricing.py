@@ -53,22 +53,25 @@ def usd_to_credits(db: Session, usd: float) -> int:
 
 
 def quote_credits_for_budget(db: Session | None, budget_usd: float) -> int:
-    """Public quote for a selected package. Prefer admin-managed tariffs; fall
-    back to the 100 credits = $1 base rate for custom/simple installs."""
+    """Credits a project of this budget costs the client.
+
+    A tariff's `credit_grant` is a package bonus that applies ONLY when the
+    client buys that exact package. It must never be used for a nearby budget:
+    the old "highest tariff priced ≤ budget" rounding charged a $5 (or default)
+    project as the $1 Trial (100 credits) — a 5–19× revenue leak for every
+    between-tariff budget. So the floor is always the proportional base rate,
+    and an exact-price tariff can only ADD its bonus on top, never reduce it.
+    """
+    per_usd = tokens_per_usd(db) if db is not None else _DEFAULT_TOKENS_PER_USD
+    base = round(budget_usd * per_usd)
+    exact_grant = 0
     if db is not None:
         from ..models import Tariff
-        tariffs = (db.query(Tariff).filter(Tariff.enabled.is_(True))
-                   .order_by(Tariff.price_usd.asc()).all())
-        chosen = None
-        for tariff in tariffs:
-            if float(tariff.price_usd) <= budget_usd:
-                chosen = tariff
-        if chosen is None and tariffs:
-            chosen = tariffs[0]
-        if chosen is not None and chosen.credit_grant:
-            return int(chosen.credit_grant)
-    per_usd = tokens_per_usd(db) if db is not None else _DEFAULT_TOKENS_PER_USD
-    return max(100, round(budget_usd * per_usd))
+        for tariff in db.query(Tariff).filter(Tariff.enabled.is_(True)).all():
+            # tolerant float/Decimal price match for a package selection
+            if abs(float(tariff.price_usd) - float(budget_usd)) < 0.005 and tariff.credit_grant:
+                exact_grant = max(exact_grant, int(tariff.credit_grant))
+    return max(100, base, exact_grant)
 
 
 def phase_weight(phase_key: str) -> int:

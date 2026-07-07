@@ -2,7 +2,7 @@ import json
 
 from fastapi import APIRouter, Cookie, Depends, Header, HTTPException
 from fastapi.responses import FileResponse, Response
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.orm import Session
 
 from ..database import get_db
@@ -80,13 +80,33 @@ class ProjectCreate(BaseModel):
     title: str = Field(min_length=1, max_length=200)
     brief: str = Field(min_length=1, max_length=20000)
     budget_usd: float = Field(gt=0, le=100000)
-    requested_outputs: list[str] = ["mvp", "docs"]
-    project_type: str = "auto"
-    project_mode: str = "auto"
-    technical_level: str = "non_technical"
-    personality_mode: str = "balanced"
-    user_goal: str = ""
+    requested_outputs: list[str] = Field(default_factory=lambda: ["mvp", "docs"],
+                                         max_length=20)
+    project_type: str = Field(default="auto", max_length=80)
+    project_mode: str = Field(default="auto", max_length=80)
+    technical_level: str = Field(default="non_technical", max_length=80)
+    personality_mode: str = Field(default="balanced", max_length=80)
+    user_goal: str = Field(default="", max_length=1000)
     simulate_client_billing: bool = False
+    # fast mode: one coherent model builds the whole project (single_agent)
+    # instead of a rotating swarm — a unified result and a much quicker run.
+    fast: bool = False
+
+    @field_validator("requested_outputs")
+    @classmethod
+    def _clean_requested_outputs(cls, values: list[str]) -> list[str]:
+        cleaned: list[str] = []
+        seen: set[str] = set()
+        for raw in values:
+            value = (raw or "").strip()
+            if not value:
+                raise ValueError("requested output must not be empty")
+            if len(value) > 80:
+                raise ValueError("requested output is too long")
+            if value not in seen:
+                cleaned.append(value)
+                seen.add(value)
+        return cleaned
 
 
 class ContinueBody(BaseModel):
@@ -117,8 +137,9 @@ def _instant_budget(db: Session, user: User) -> float:
     the largest package their balance safely covers. 0 → cannot start."""
     from ..models import Tariff
     balance = user.token_balance or 0
-    if user.role != "admin" and (user.demo_generations_remaining or 0) > 0 \
-            and balance >= 1:
+    if user.role == "admin":
+        return 20.0  # founder test runs bypass billing; a mid-size package
+    if (user.demo_generations_remaining or 0) > 0 and balance >= 1:
         return 1.0  # first project rides the trial slot
     prices = [float(t.price_usd) for t in
               db.query(Tariff).filter(Tariff.enabled.is_(True))
@@ -316,6 +337,8 @@ def create(body: ProjectCreate, user: User = Depends(get_current_user),
     project.demo_run = auth["demo_run"]
     project.billing_mode = auth.get("billing_mode", "client")
     project.billing_note = auth.get("billing_note", "")
+    if body.fast:
+        project.execution_mode = "single_agent"
     db.commit()
     log_user_activity(db, user, "project_created", project_id=project.id,
                       meta={"budget_usd": body.budget_usd,
@@ -359,6 +382,10 @@ def instant_create(body: InstantCreate, user: User = Depends(get_current_user),
         "Готовый проект под ключ: скачать и пользоваться без доработок.",
         user_id=user.id)
     project.demo_run = auth["demo_run"]
+    # the one-button flow is the "just make it" path: run in fast mode so the
+    # client gets ONE coherent, runnable project (single model) instead of a
+    # swarm of fragments, and gets it quickly.
+    project.execution_mode = "single_agent"
     project.status = "queued"
     db.commit()
     log_user_activity(db, user, "project_created_instant", project_id=project.id,
@@ -494,14 +521,27 @@ def phases(project_id: str, user: User = Depends(get_current_user),
             for i, r in enumerate(rows)]
 
 
+# The client-facing "final files" list is deliberately lean: the packaged
+# archive (which already contains every supporting doc) plus the single primary
+# deliverable. Business-plan/pitch-deck/limitations/etc. still ship INSIDE the
+# zip, they just do not clutter the top-level list. Admins can pass `?full=1`
+# to see every artifact (including internal phase outputs) for diagnostics.
+_HEADLINE_ARTIFACTS = ("project.zip", "README.md", "main-document.md")
+
+
 @router.get("/{project_id}/artifacts")
-def artifacts(project_id: str, user: User = Depends(get_current_user),
+def artifacts(project_id: str, full: bool = False,
+              user: User = Depends(get_current_user),
               db: Session = Depends(get_db)):
     _accessible_project(db, project_id, user)
-    q = db.query(Artifact).filter(Artifact.project_id == project_id)
-    if user.role != "admin":
-        q = q.filter(Artifact.artifact_type == "final")
-    rows = q.order_by(Artifact.created_at.asc()).all()
+    rows = (db.query(Artifact).filter(Artifact.project_id == project_id)
+            .order_by(Artifact.created_at.asc()).all())
+    if not (full and user.role == "admin"):
+        rows = [a for a in rows
+                if a.artifact_type == "final" and a.display_name in _HEADLINE_ARTIFACTS]
+        # keep a stable, meaningful order: archive first, then the main document
+        rows.sort(key=lambda a: _HEADLINE_ARTIFACTS.index(a.display_name)
+                  if a.display_name in _HEADLINE_ARTIFACTS else 99)
     return [{"id": a.id, "artifact_type": a.artifact_type, "path": a.path,
              "display_name": a.display_name,
              "safety_status": getattr(a, "safety_status", "safe_to_download")} for a in rows]
@@ -519,7 +559,9 @@ def _artifact_file(db: Session, project_id: str, artifact_id: str):
         raise HTTPException(404, "artifact not found")
     ws = workspace_path(project_id)
     f = (ws / a.path).resolve()
-    if not str(f).startswith(str(ws.resolve())) or not f.exists():
+    # Path-component containment (not a string prefix): a bare startswith would
+    # accept a sibling workspace sharing the same prefix (…/ws-evil vs …/ws).
+    if not f.is_relative_to(ws.resolve()) or not f.exists():
         raise HTTPException(404, "file not found")
     return a, f
 

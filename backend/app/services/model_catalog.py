@@ -20,7 +20,9 @@ import urllib.request
 from sqlalchemy.orm import Session
 
 from ..models import ModelEntry, Provider
+from ..providers.base import guarded_urlopen
 from . import key_pool
+from .settings_service import get_setting
 
 # model id → (input $/1M, output $/1M, cost_level, production)
 GROQ_PRICES: dict[str, tuple[float, float, str, bool]] = {
@@ -48,14 +50,17 @@ def _is_chat_model(model_id: str) -> bool:
     return not any(marker in low for marker in _NON_CHAT_MARKERS)
 
 
-def fetch_provider_models(base_url: str, api_key: str, timeout: float = 15.0) -> list[dict]:
+def fetch_provider_models(base_url: str, api_key: str, timeout: float = 15.0,
+                          allow_private: bool = False) -> list[dict]:
     """GET {base_url}/models — OpenAI-compatible listing."""
     req = urllib.request.Request(
         f"{base_url.rstrip('/')}/models",
         headers={"Authorization": f"Bearer {api_key}",
                  "User-Agent": "SwarmBuild/1.0"})
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        # guards the initial URL and every redirect hop (the API key rides this
+        # request, so a redirect to an internal host must not be followed).
+        with guarded_urlopen(req, timeout, allow_private) as resp:
             data = json.loads(resp.read(2_000_000))
     except urllib.error.HTTPError as exc:
         raise RuntimeError(f"catalog fetch failed: HTTP {exc.code}") from exc
@@ -77,7 +82,11 @@ def sync_groq_models(db: Session, provider: Provider) -> dict:
     records = key_pool.ordered_key_records(db, provider)
     if not records:
         raise RuntimeError(f"{provider.name}: no usable API keys to query the catalog")
-    live = fetch_provider_models(provider.base_url, records[0]["plaintext"])
+    live = fetch_provider_models(
+        provider.base_url,
+        records[0]["plaintext"],
+        allow_private=bool(get_setting(db, "allow_private_provider_urls")),
+    )
 
     existing = {m.model_name: m for m in
                 db.query(ModelEntry).filter(ModelEntry.provider_id == provider.id).all()}

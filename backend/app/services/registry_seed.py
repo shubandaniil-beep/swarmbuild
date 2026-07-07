@@ -176,6 +176,8 @@ def seed_defaults(db: Session) -> None:
         db.commit()
     _disable_legacy_dev_admin(db, admin_email)
     _backfill_user_credits(db)
+    from .pay_codes import backfill_pay_codes
+    backfill_pay_codes(db)
     _mark_interrupted_projects(db)
 
 
@@ -353,6 +355,21 @@ def _backfill_user_credits(db: Session) -> None:
 
 
 _MAX_AUTO_RESUMES = 3
+# A project that produced activity newer than this is treated as still alive —
+# a live worker (this process, or another on a multi-worker deploy) is on it, so
+# re-queuing it would run its phases twice. Only projects silent past this window
+# are considered orphaned by a restart.
+_RESUME_STALE_SECONDS = 180
+
+
+def _seconds_since(dt) -> float:
+    """Age in seconds of a possibly-naive timestamp, treated as UTC."""
+    from datetime import UTC, datetime
+    if dt is None:
+        return float("inf")
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=UTC)
+    return (datetime.now(UTC) - dt).total_seconds()
 
 
 def _mark_interrupted_projects(db: Session) -> None:
@@ -372,11 +389,26 @@ def _mark_interrupted_projects(db: Session) -> None:
                    .all())
     if not interrupted:
         return
-    from ..workers.project_worker import enqueue
+    from ..workers.project_worker import enqueue, is_running
 
     for project in interrupted:
         previous = project.status
         current_phase = project.current_phase
+
+        # Liveness guard — never re-queue a project that is still being worked
+        # on, or the orchestrator runs its phases twice (duplicate issues, wasted
+        # model spend). (1) this process is actively running it; (2) it produced
+        # activity within the freshness window, so a live worker (here or on
+        # another process in a multi-worker deploy) is probably still on it.
+        if is_running(project.id):
+            continue
+        last_event = (db.query(Event.created_at)
+                      .filter(Event.project_id == project.id)
+                      .order_by(Event.created_at.desc()).first())
+        last_at = last_event[0] if last_event else project.created_at
+        if _seconds_since(last_at) < _RESUME_STALE_SECONDS:
+            continue
+
         resumes = (db.query(Event)
                    .filter(Event.project_id == project.id,
                            Event.event_type == "worker_resumed").count())

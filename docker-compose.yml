@@ -22,6 +22,15 @@ services:
       REDIS_URL: redis://redis:6379/0
       STORAGE_PATH: /data/projects
       ENCRYPTION_SECRET: ${ENCRYPTION_SECRET:-change-me-to-a-long-random-string}
+      # Reverse-proxy IP/subnet uvicorn trusts for X-Forwarded-* headers. MUST
+      # match the proxy in front of the backend (e.g. the Docker bridge subnet
+      # or the LB's IP). NEVER "*" — a wildcard lets any client spoof
+      # X-Forwarded-For and bypass per-IP anti-fraud / brute-force limits.
+      FORWARDED_ALLOW_IPS: ${FORWARDED_ALLOW_IPS:-127.0.0.1}
+      # Comma-separated allowed browser origins in production, e.g.
+      # https://app.yourdomain.com — without it the API rejects the deployed
+      # frontend (defaults to localhost only).
+      CORS_ALLOW_ORIGINS: ${CORS_ALLOW_ORIGINS:-}
       ADMIN_EMAIL: ${ADMIN_EMAIL:-founder@swarmbuild.ai}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-replace-with-a-long-unique-founder-password}
       DEFAULT_MODEL_PROVIDER: ${DEFAULT_MODEL_PROVIDER:-mock}
@@ -42,9 +51,12 @@ services:
         condition: service_healthy
 
   frontend:
-    build: ./frontend
-    environment:
-      NEXT_PUBLIC_API_URL: http://localhost:8000
+    build:
+      context: ./frontend
+      args:
+        # Baked into the client bundle at build time. Set to the PUBLIC backend
+        # URL for a real deploy, e.g. https://api.yourdomain.com.
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8000}
     ports:
       - "3000:3000"
     depends_on:

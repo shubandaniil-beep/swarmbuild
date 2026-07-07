@@ -7,8 +7,8 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
-from sqlalchemy import func
+from pydantic import BaseModel, Field
+from sqlalchemy import func, update
 from sqlalchemy.orm import Session
 
 from ..database import get_db
@@ -88,7 +88,8 @@ def dashboard(db: Session = Depends(get_db)):
         "projects_ready": by_status.get("ready", 0),
         "projects_partial_ready": by_status.get("partial_ready", 0),
         "projects_failed": by_status.get("failed", 0),
-        "projects_running": by_status.get("running", 0) + by_status.get("queued", 0),
+        "projects_running": sum(by_status.get(s, 0) for s in
+                                ("running", "queued", "packaging", "repairing")),
         "estimated_spend_usd": round(float(total_spend), 6),
         "credits_per_usd": credit_pricing.tokens_per_usd(db),
         "credits_spent": int(credits_spent),
@@ -312,6 +313,7 @@ def users(db: Session = Depends(get_db)):
         "token_balance": u.token_balance or 0,
         "lifetime_tokens_spent": u.lifetime_tokens_spent or 0,
         "demo_generations_remaining": u.demo_generations_remaining or 0,
+        "pay_code": u.pay_code or "",
     } for u in db.query(User).order_by(User.created_at.asc()).all()]
 
 
@@ -349,13 +351,13 @@ def toggle_disable(user_id: str, body: dict, db: Session = Depends(get_db)):
 # --- providers ---------------------------------------------------------------
 
 class ProviderBody(BaseModel):
-    name: str
-    provider_type: str
-    base_url: str = ""
-    api_key: str = ""
+    name: str = Field(min_length=1, max_length=120)
+    provider_type: str = Field(min_length=1, max_length=40)
+    base_url: str = Field(default="", max_length=500)
+    api_key: str = Field(default="", max_length=50_000)
     enabled: bool = True
     priority: int = 100
-    notes: str = ""
+    notes: str = Field(default="", max_length=2000)
 
 
 def _is_private_host(host: str) -> bool:
@@ -525,8 +527,8 @@ def delete_provider_key(provider_id: str, db: Session = Depends(get_db),
 # --- key pool ----------------------------------------------------------------
 
 class KeysBody(BaseModel):
-    keys: str = ""
-    label_prefix: str = ""
+    keys: str = Field(default="", max_length=50_000)
+    label_prefix: str = Field(default="", max_length=40)
 
 
 def _key_out(k: ProviderKey) -> dict:
@@ -616,7 +618,8 @@ def test_provider(provider_id: str, db: Session = Depends(get_db)):
     card = {"provider": p.provider_type, "base_url": p.base_url,
             "model_name": _test_model_for(db, p), "max_output_tokens": 16,
             "default_temperature": 0, "input_cost_per_1m": 0, "output_cost_per_1m": 0,
-            "timeout_seconds": int(get_setting(db, "provider_call_timeout_seconds") or 20)}
+            "timeout_seconds": int(get_setting(db, "provider_call_timeout_seconds") or 20),
+            "allow_private_provider_urls": bool(get_setting(db, "allow_private_provider_urls"))}
     if p.provider_type == "openrouter":
         card["http_referer"] = str(get_setting(db, "openrouter_http_referer") or "").strip()
         card["app_title"] = str(get_setting(db, "openrouter_app_title") or "").strip()
@@ -659,9 +662,9 @@ def _test_model_for(db: Session, p: Provider) -> str:
 # --- model registry ----------------------------------------------------------
 
 class ModelBody(BaseModel):
-    display_name: str
-    provider_id: str
-    model_name: str
+    display_name: str = Field(min_length=1, max_length=160)
+    provider_id: str = Field(min_length=1, max_length=80)
+    model_name: str = Field(min_length=1, max_length=200)
     enabled: bool = True
     cost_level: str = "medium"
     input_price_per_1m: float = 1
@@ -673,7 +676,7 @@ class ModelBody(BaseModel):
     supports_vision: bool = False
     supports_code: bool = True
     priority: int = 100
-    notes: str = ""
+    notes: str = Field(default="", max_length=2000)
 
 
 def _model_out(m: ModelEntry) -> dict:
@@ -735,9 +738,9 @@ def delete_model(model_id: str, db: Session = Depends(get_db),
 # --- tariffs -----------------------------------------------------------------
 
 class TariffBody(BaseModel):
-    name: str
+    name: str = Field(min_length=1, max_length=120)
     price_usd: float
-    description: str = ""
+    description: str = Field(default="", max_length=2000)
     swarm_size: int = 4
     max_phases: int = 8
     model_budget_usd: float = 0
@@ -748,6 +751,10 @@ class TariffBody(BaseModel):
     allowed_project_modes: list[str] = []
     allowed_outputs: list[str] = []
     priority: int = 100
+
+
+class TopupApproveBody(BaseModel):
+    provider_ref: str = Field(default="", max_length=200)
 
 
 def _tariff_out(t: Tariff) -> dict:
@@ -825,22 +832,36 @@ def topups(status: str | None = None, db: Session = Depends(get_db)):
 
 
 @router.post("/topups/{topup_id}/approve")
-def approve_topup(topup_id: str, body: dict, db: Session = Depends(get_db),
+def approve_topup(topup_id: str, body: TopupApproveBody, db: Session = Depends(get_db),
                   admin: User = Depends(require_admin)):
     row = db.get(CreditTopup, topup_id)
     if not row:
         raise HTTPException(404, "top-up not found")
-    if row.status != "pending":
-        raise HTTPException(409, "top-up already processed")
     user = db.get(User, row.user_id)
     if not user:
         raise HTTPException(404, "user not found")
-    row.status = "paid"
-    row.provider_ref = str(body.get("provider_ref") or "")
-    row.paid_at = datetime.now(UTC)
-    user.token_balance = (user.token_balance or 0) + row.credits
-    user.lifetime_tokens_granted = (user.lifetime_tokens_granted or 0) + row.credits
+    paid_at = datetime.now(UTC)
+    claimed = db.execute(
+        update(CreditTopup)
+        .where(CreditTopup.id == topup_id, CreditTopup.status == "pending")
+        .values(status="paid", provider_ref=body.provider_ref, paid_at=paid_at)
+        .execution_options(synchronize_session=False)
+    )
+    if claimed.rowcount != 1:
+        db.rollback()
+        raise HTTPException(409, "top-up already processed")
+    db.execute(
+        update(User)
+        .where(User.id == row.user_id)
+        .values(
+            token_balance=User.token_balance + row.credits,
+            lifetime_tokens_granted=User.lifetime_tokens_granted + row.credits,
+        )
+        .execution_options(synchronize_session=False)
+    )
     db.commit()
+    db.refresh(row)
+    db.refresh(user)
     _audit(db, admin, "topup_approved", topup_id=row.id, user_id=user.id,
            credits=row.credits, amount_usd=float(row.amount_usd))
     log_user_activity(db, user, "topup_credited",
@@ -866,17 +887,17 @@ def cancel_topup(topup_id: str, db: Session = Depends(get_db),
 # --- project types -----------------------------------------------------------
 
 class ProjectTypeBody(BaseModel):
-    key: str
-    display_name: str
-    description: str = ""
+    key: str = Field(min_length=1, max_length=80)
+    display_name: str = Field(min_length=1, max_length=160)
+    description: str = Field(default="", max_length=2000)
     enabled: bool = True
     requires_codebase: bool = True
     default_outputs: list[str] = []
     default_phases: list[str] = []
     recommended_budget_min: float = 20
     recommended_budget_max: float = 200
-    template_prompt: str = ""
-    notes: str = ""
+    template_prompt: str = Field(default="", max_length=10000)
+    notes: str = Field(default="", max_length=2000)
 
 
 def _ptype_out(t: ProjectType) -> dict:

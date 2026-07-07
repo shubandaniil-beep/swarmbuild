@@ -1,6 +1,73 @@
+import ipaddress
 import json
+import socket
 import time
+import urllib.request
 from dataclasses import dataclass, field
+from urllib.parse import urlparse
+
+
+def guard_egress_url(url: str, allow_private: bool = False) -> None:
+    """Runtime SSRF guard, called right before every provider request.
+
+    A provider's base_url is checked when it is saved, but DNS can be re-pointed
+    between that check and the actual call (DNS rebinding). Re-resolve here and
+    block host-internal ranges. RFC1918/private ranges are only allowed when
+    the admin has explicitly enabled private provider URLs; loopback, link-local
+    metadata, multicast, reserved and unspecified addresses are always blocked.
+    """
+    host = (urlparse(url).hostname or "").strip("[]")
+    if not host:
+        return
+    addrs: set[str] = set()
+    try:
+        addrs.add(host)  # host is already an IP literal
+        ipaddress.ip_address(host)
+    except ValueError:
+        try:
+            addrs = {info[4][0] for info in socket.getaddrinfo(host, None)}
+        except socket.gaierror:
+            return  # let urlopen surface the DNS failure with its own error
+    for addr in addrs:
+        try:
+            ip = ipaddress.ip_address(addr.split("%")[0])
+        except ValueError:
+            continue
+        always_block = any((
+            ip.is_loopback,
+            ip.is_link_local,
+            ip.is_multicast,
+            ip.is_reserved,
+            ip.is_unspecified,
+        ))
+        if always_block or (ip.is_private and not allow_private):
+            raise RuntimeError("blocked egress to a host-internal address (SSRF guard)")
+
+
+class _GuardedRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Re-runs the SSRF guard on every redirect target.
+
+    urlopen() follows up to 10 redirects by default. Guarding only the original
+    URL leaves a hole: a provider host (or a rebound DNS name) can answer with
+    `30x Location: http://169.254.169.254/…` or an internal address, and urllib
+    would follow it — carrying the request's API key — past a guard that only
+    ever saw the first hop. Validating each hop closes that."""
+
+    def __init__(self, allow_private: bool = False):
+        super().__init__()
+        self._allow_private = allow_private
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        guard_egress_url(newurl, self._allow_private)
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+def guarded_urlopen(req, timeout, allow_private: bool = False):
+    """Drop-in urlopen that SSRF-guards the initial URL *and* every redirect hop."""
+    url = req.full_url if hasattr(req, "full_url") else req
+    guard_egress_url(url, allow_private)
+    opener = urllib.request.build_opener(_GuardedRedirectHandler(allow_private))
+    return opener.open(req, timeout=timeout)
 
 
 @dataclass

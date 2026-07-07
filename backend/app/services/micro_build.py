@@ -37,17 +37,21 @@ _PLAN_TASK = (
 
 
 def should_microtask(db: Session, assignments: list[dict]) -> bool:
-    """True when the phase would otherwise hand the whole build to a single
-    cheap real model — the case micro-tasking exists for."""
+    """True when the model that would AUTHOR the code is weak (low/free tier).
+
+    A weak model asked to emit a whole project in one shot reliably produces
+    prose, partial files or garbage. Decomposing into plan→file→check→repair is
+    what small models can actually do, so we micro-task whenever the build's
+    author is weak — even in a multi-model pool. Capability routing already put
+    the strongest available model on `builder`, so a weak author means the whole
+    pool is weak; a strong author (medium/high) keeps the normal swarm build.
+    """
     if not bool(get_setting(db, "enable_micro_build")):
         return False
-    cards = [a.get("card") or {} for a in assignments]
-    if not cards:
+    if not assignments:
         return False
-    routes = {(c.get("provider_id"), c.get("model_name")) for c in cards}
-    if len(routes) != 1:
-        return False
-    card = cards[0]
+    author = next((a for a in assignments if a.get("mandate") == "builder"), assignments[0])
+    card = author.get("card") or {}
     if card.get("provider") == "mock":
         return False  # mock builds whole repos deterministically already
     return card.get("cost_level") in ("low", "free")
@@ -107,7 +111,8 @@ def _syntax_error(path: str, content: str) -> str | None:
 
 def run_micro_build(db: Session, ws: Path, project, phase_key: str,
                     assignment: dict, agent_db_id: str,
-                    budget_left_usd: float) -> list[tuple] | None:
+                    budget_left_usd: float,
+                    base_extra: dict | None = None) -> list[tuple] | None:
     """Run the plan→file→check→repair loop with one worker assignment.
 
     Returns entries shaped exactly like the orchestrator's normal results —
@@ -119,9 +124,13 @@ def run_micro_build(db: Session, ws: Path, project, phase_key: str,
 
     spent = 0.0
     entries: list[tuple] = []
+    # the shared integration contract (file rules, existing repo) applies to
+    # micro-tasks exactly like to swarm builders
+    base_extra = {k: v for k, v in (base_extra or {}).items()
+                  if k in ("file_rules", "repo_files")}
 
     plan_result, cost = run_agent(db, ws, project, phase_key, assignment,
-                                  agent_db_id, {"micro_task": _PLAN_TASK})
+                                  agent_db_id, {**base_extra, "micro_task": _PLAN_TASK})
     spent += cost
     plan_result.files = {}  # the plan is coordination, never repo content
     entries.append((assignment, agent_db_id, plan_result, cost))
@@ -145,7 +154,7 @@ def run_micro_build(db: Session, ws: Path, project, phase_key: str,
                       {"spent_usd": round(spent, 6), "done": done}, ws)
             break
         result, cost = run_agent(db, ws, project, phase_key, assignment, agent_db_id,
-                                 {"micro_task": _file_task(entry, done, brief_reminder)})
+                                 {**base_extra, "micro_task": _file_task(entry, done, brief_reminder)})
         spent += cost
         entries.append((assignment, agent_db_id, result, cost))
         if getattr(result, "status", "") == "mock_fallback":
@@ -165,7 +174,7 @@ def run_micro_build(db: Session, ws: Path, project, phase_key: str,
         error = _syntax_error(entry["path"], content)
         if error:
             fix, cost = run_agent(db, ws, project, phase_key, assignment, agent_db_id,
-                                  {"micro_task": _repair_task(entry["path"], error)})
+                                  {**base_extra, "micro_task": _repair_task(entry["path"], error)})
             spent += cost
             fixed = fix.files.get(entry["path"])
             if fixed is None and len(fix.files) == 1:

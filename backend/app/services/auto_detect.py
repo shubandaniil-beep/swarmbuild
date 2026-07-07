@@ -9,9 +9,31 @@ _BUSINESS_KEYWORDS = ("бизнес-план", "бизнес план", "busines
                       "стратеги", "монетизац")
 _PITCH_KEYWORDS = ("pitch", "питч", "презентац", "deck", "слайд")
 _MARKETING_KEYWORDS = ("маркетинг", "marketing", "реклам", "smm", "брендинг")
-_CODE_KEYWORDS = ("бот", "bot", "crm", "сайт", "site", "app", "приложен", "api",
-                  "скрипт", "script", "лендинг", "landing", "dashboard", "дашборд",
-                  "интеграц", "калькулятор", "calculator", "утилит", "saas", "код")
+_CODE_KEYWORDS = (
+    # products / surfaces
+    "бот", "bot", "crm", "сайт", "site", "app", "приложен", "api", "лендинг",
+    "landing", "dashboard", "дашборд", "интеграц", "калькулятор", "calculator",
+    "калькул", "утилит", "saas", "код", "code", "web", "веб", "backend", "бэкенд",
+    "frontend", "фронтенд", "микросервис", "microservice", "webhook", "вебхук",
+    # scripts / tools / generic programs
+    "скрипт", "script", "программ", "program", "tool", "инструмент", "cli",
+    "command line", "command-line", "консол", "console", "терминал", "terminal",
+    "парсер", "parser", "скрапер", "scraper", "краулер", "crawler",
+    "генератор", "generator", "конвертер", "converter", "менеджер", "manager",
+    "трекер", "tracker", "планировщик", "planner", "todo", "движок", "engine",
+    "библиотек", "library", "алгоритм", "algorithm", "функци", "function",
+    "класс ", "сортиров", "sort", "автоматизац", "automation", "chatbot",
+    "чат-бот", "игр", "game", "база данных", "database", "бд ",
+    # programming languages
+    "python", "питон", "javascript", " js ", "typescript", " ts ", "node",
+    "react", "vue", "django", "flask", "fastapi", "java", "golang", "rust",
+    "c++", "c#", "php", "ruby", "kotlin", "swift", "sql", "html", "css")
+# A build/creation verb pushes an otherwise-ambiguous brief to CODE — SwarmBuild
+# is a project factory, so "сделай/напиши/build X" that is not clearly a document
+# is almost always software.
+_BUILD_VERBS = ("напиши", "сдела", "созда", "построй", "реализ", "разработ",
+                "запрограммир", "build", "make ", "create", "write", "develop",
+                "program ", "implement", "код")
 _NO_CODE_PHRASES = ("без кода", "код не нужен", "не нужен код", "no code",
                     "without code", "не требуется код", "не нужна кодовая база")
 
@@ -29,11 +51,17 @@ def detect(db: Session, brief: str, requested_type: str = "auto",
         return requested_type, mode, requires
 
     no_code_requested = any(k in b for k in _NO_CODE_PHRASES)
-    has_code = any(k in b for k in _CODE_KEYWORDS) and not no_code_requested
     has_doc = any(k in b for k in _DOC_KEYWORDS)
     has_biz = any(k in b for k in _BUSINESS_KEYWORDS)
     has_pitch = any(k in b for k in _PITCH_KEYWORDS)
     has_mkt = any(k in b for k in _MARKETING_KEYWORDS)
+    # a bare build/creation verb counts as a code signal only when the brief is
+    # not clearly a document deliverable — so "напиши программу" is code, but
+    # "напиши диплом" / "сделай бизнес-план" / "сделай презентацию" stay documents.
+    has_build_verb = any(k in b for k in _BUILD_VERBS)
+    verb_implies_code = has_build_verb and not (has_doc or has_biz or has_pitch or has_mkt)
+    has_code = ((any(k in b for k in _CODE_KEYWORDS) or verb_implies_code)
+                and not no_code_requested)
 
     if requested_mode == "document" or (has_doc and not has_code):
         return ("diploma_or_coursework" if any(k in b for k in ("диплом", "курсов", "thesis"))

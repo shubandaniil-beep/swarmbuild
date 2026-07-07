@@ -49,6 +49,11 @@ class Settings:
 
     PLATFORM_FEE_PERCENT: int = int(_env("PLATFORM_FEE_PERCENT", "30"))
 
+    # Shared secret for the Telegram payment bot. The bot sends it as
+    # `Authorization: Bearer <secret>` on /api/telegram/* calls (its SITE_API_KEY
+    # must equal this). Empty ⇒ the /api/telegram integration is disabled.
+    PAYMENT_BOT_SECRET: str = _env("PAYMENT_BOT_SECRET")
+
 
 settings = Settings()
 settings.STORAGE_PATH.mkdir(parents=True, exist_ok=True)

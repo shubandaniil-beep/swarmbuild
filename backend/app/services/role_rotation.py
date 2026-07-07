@@ -30,6 +30,31 @@ def _route(card: dict) -> tuple:
     return (card.get("provider_id"), card.get("model_name"))
 
 
+# Model strength proxy from the registry's cost tier. Missing tier → neutral, so
+# a homogeneous pool (all equal) reorders to nothing and pure rotation stands.
+_STRENGTH = {"high": 4, "medium": 3, "low": 2, "free": 1}
+
+# Phases whose primary author produces the shippable deliverable (spec, design,
+# code, repairs). On these the strongest available model MUST hold the author
+# mandate so a weak-heavy pool still yields a comprehensive result; the checker
+# roles stay rotated by the independence pass, so cross-checking is preserved.
+_AUTHOR_PHASES = {"spec_war", "architecture_battle", "build_sprint", "repair_sprint"}
+# The mandate that authors each deliverable phase's primary artifact. Spec and
+# architecture are led; code and repairs are built/repaired.
+_PRIMARY_AUTHOR = {
+    "spec_war": "lead",
+    "architecture_battle": "lead",
+    "build_sprint": "builder",
+    "repair_sprint": "repairer",
+}
+# Fallback resolution order if the phase's primary mandate was trimmed out.
+_AUTHOR_MANDATES = ("builder", "repairer", "lead")
+
+
+def model_strength(card: dict) -> int:
+    return _STRENGTH.get(str(card.get("cost_level") or "").lower(), 2)
+
+
 def build_rotation_plan(phases: list[str], pool: list[dict]) -> list[dict]:
     """Assign mandates for every phase, rotating the agent order each phase."""
     n = len(pool)
@@ -48,6 +73,27 @@ def build_rotation_plan(phases: list[str], pool: list[dict]) -> list[dict]:
                     if j != li and lead_streak.get(order[j]["id"], 0) < 2:
                         order[li], order[j] = order[j], order[li]
                         break
+
+        # capability routing: on deliverable-authoring phases put the STRONGEST
+        # available model into the author slot, so even a pool full of weak
+        # models produces a comprehensive artifact. No-op when all cards share a
+        # strength tier (pure rotation stands). Respects the no-lead-3x rule when
+        # the author mandate is `lead`.
+        if phase in _AUTHOR_PHASES:
+            primary = _PRIMARY_AUTHOR.get(phase)
+            author_mandate = (primary if primary in mandates
+                              else next((m for m in _AUTHOR_MANDATES if m in mandates), None))
+            if author_mandate is not None:
+                ai = mandates.index(author_mandate)
+                best = ai
+                for j in range(len(order)):
+                    if model_strength(order[j]) <= model_strength(order[best]):
+                        continue
+                    if author_mandate == "lead" and lead_streak.get(order[j]["id"], 0) >= 2:
+                        continue
+                    best = j
+                if best != ai:
+                    order[ai], order[best] = order[best], order[ai]
 
         # rule: independent cross-checking — the judge and the first reviewer
         # must be a DIFFERENT real model than the phase author (lead, else

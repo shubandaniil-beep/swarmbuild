@@ -200,19 +200,20 @@ def _assignment(cost_level="low", provider="gemini", model="gemini-2.5-flash"):
             "mandate": "builder", "agent_slot": 1, "access": ["repo"], "card": card}
 
 
-def test_should_microtask_only_for_single_cheap_real_model(client):
+def test_should_microtask_when_the_code_author_is_weak(client):
     db = SessionLocal()
     try:
+        # a single weak model authoring the build → decompose
         assert micro_build.should_microtask(db, [_assignment()]) is True
-        # same single route duplicated into virtual slots still counts as one
+        # a weak author still decomposes even alongside other weak models —
+        # a pool of small models one-shotting in parallel is exactly what
+        # produces thin/garbage output.
         assert micro_build.should_microtask(
-            db, [_assignment(), _assignment()]) is True
-        # two distinct models → normal swarm build
-        two = [_assignment(),
-               _assignment(model="other-model")]
-        assert micro_build.should_microtask(db, two) is False
-        # an expensive model gets the whole task
+            db, [_assignment(), _assignment(model="other-weak")]) is True
+        # a strong author (capability routing put a medium/high model on
+        # `builder`) keeps the normal swarm build
         assert micro_build.should_microtask(db, [_assignment(cost_level="high")]) is False
+        assert micro_build.should_microtask(db, [_assignment(cost_level="medium")]) is False
         # mock builds deterministic repos already
         assert micro_build.should_microtask(db, [_assignment(provider="mock")]) is False
     finally:

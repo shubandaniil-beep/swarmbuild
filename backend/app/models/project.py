@@ -30,6 +30,10 @@ class Project(Base):
     deleted: Mapped[bool] = mapped_column(Boolean, default=False)
     status: Mapped[str] = mapped_column(String, default="draft")
     complexity: Mapped[str] = mapped_column(String, default="medium")
+    # "" = use the global execution_mode setting; "single_agent" = fast mode
+    # (one coherent model builds the whole project instead of a swarm of
+    # fragments); "swarm" = force the full rotating swarm.
+    execution_mode: Mapped[str] = mapped_column(String, default="")
     swarm_size: Mapped[int] = mapped_column(Integer, default=4)
     current_phase: Mapped[str | None] = mapped_column(String, nullable=True)
     # Binding release gate (spec §7.10): a client may only download project.zip

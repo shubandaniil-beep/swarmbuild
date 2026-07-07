@@ -52,9 +52,14 @@ def test_full_mock_pipeline(user_client):
     events = user_client.get(f"/api/projects/{project_id}/events").json()
     assert any(e["type"] == "packaged" for e in events)
 
+    # the client-facing list is lean: the archive + the primary deliverable.
+    # Supporting docs (limitations, business-plan, …) ship inside project.zip,
+    # not as separate top-level entries.
     artifacts = user_client.get(f"/api/projects/{project_id}/artifacts").json()
     names = {a["display_name"] for a in artifacts}
-    assert {"README.md", "limitations.md"} <= names
+    assert "project.zip" in names
+    assert "README.md" in names or "main-document.md" in names
+    assert "limitations.md" not in names  # in the zip, not the headline list
 
     res = user_client.get(f"/api/projects/{project_id}/download")
     assert res.status_code == 200
@@ -228,3 +233,19 @@ def test_instant_refused_without_credits(client):
         c.headers["Authorization"] = f"Bearer {create_token(user_id, 0)}"
         res = c.post("/api/projects/instant", json={"prompt": BRIEF})
         assert res.status_code == 402
+
+
+def test_instant_budget_for_admin_bypasses_balance(client):
+    """The founder's magic button must not 402 on a zero credit balance —
+    admin runs bypass client billing entirely."""
+    from app.api.projects import _instant_budget
+    from app.database import SessionLocal
+    from app.models import User
+
+    db = SessionLocal()
+    try:
+        admin = db.query(User).filter(User.role == "admin").first()
+        assert admin is not None
+        assert _instant_budget(db, admin) > 0
+    finally:
+        db.close()

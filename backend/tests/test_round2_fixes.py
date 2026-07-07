@@ -248,6 +248,22 @@ def test_stale_missing_file_issues_are_closed(client):
 # 6. backend restart auto-resumes interrupted projects                         #
 # --------------------------------------------------------------------------- #
 
+def _age_activity_to_stale(db, project_id: str) -> None:
+    """Make a project look orphaned by a restart: no activity within the resume
+    freshness window. The liveness guard only re-queues genuinely silent
+    projects, so tests must age the project + its events past the threshold."""
+    from datetime import UTC, datetime, timedelta
+
+    from app.models import Project
+    from app.services.registry_seed import _RESUME_STALE_SECONDS
+    old = datetime.now(UTC) - timedelta(seconds=_RESUME_STALE_SECONDS + 60)
+    p = db.get(Project, project_id)
+    p.created_at = old
+    for e in db.query(Event).filter(Event.project_id == project_id).all():
+        e.created_at = old
+    db.commit()
+
+
 def test_restart_requeues_interrupted_project(client, monkeypatch):
     from app.services import registry_seed
     from app.workers import project_worker
@@ -265,6 +281,7 @@ def test_restart_requeues_interrupted_project(client, monkeypatch):
         project.status = "running"
         project.current_phase = "build_sprint"
         db.commit()
+        _age_activity_to_stale(db, pid)  # a restart leaves the project silent
 
         registry_seed._mark_interrupted_projects(db)
         db.refresh(project)
@@ -295,6 +312,7 @@ def test_restart_crash_loop_parks_project_as_failed(client, monkeypatch):
             db.add(Event(project_id=pid, event_type="worker_resumed",
                          message="resumed", meta={}))
         db.commit()
+        _age_activity_to_stale(db, pid)  # a restart leaves the project silent
 
         registry_seed._mark_interrupted_projects(db)
         db.refresh(project)
@@ -387,7 +405,7 @@ def test_groq_catalog_sync_reconciles_registry(client, monkeypatch):
         {"id": "whisper-large-v3", "active": True, "context_window": 448},
     ]
     monkeypatch.setattr(model_catalog, "fetch_provider_models",
-                        lambda base_url, key, timeout=15.0: live)
+                        lambda base_url, key, timeout=15.0, allow_private=False: live)
 
     db = SessionLocal()
     try:

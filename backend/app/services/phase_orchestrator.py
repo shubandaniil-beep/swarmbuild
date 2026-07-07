@@ -138,7 +138,16 @@ def run_project(db: Session, project_id: str) -> None:
     phase_keys = [p.phase_key for p in phases]
 
     budget = budget_engine.load_budget_state(ws)
-    execution_mode = _execution_mode(db)
+    # a project can pin its own mode ("fast"/single_agent); otherwise the global
+    # setting applies. Per-project choice wins so a fast one-button build stays
+    # fast even when the platform default is the full swarm.
+    project_mode = str(getattr(project, "execution_mode", "") or "").strip().lower()
+    if project_mode in ("single_agent", "single-agent", "single", "solo", "one", "fast"):
+        execution_mode = "single_agent"
+    elif project_mode == "swarm":
+        execution_mode = "swarm"
+    else:
+        execution_mode = _execution_mode(db)
     effective_swarm_size = 1 if execution_mode == "single_agent" else project.swarm_size
     try:
         pool = select_pool(db, effective_swarm_size, budget.get("saving_mode", False))
@@ -249,7 +258,9 @@ def run_project(db: Session, project_id: str) -> None:
                   f"Phase {phase.phase_key}: {charge['charged']} credits (progress proven)",
                   {**charge, "progress_proof": phase.progress_proof}, ws)
         if charge["stopped"]:
-            _partial_finish(db, project, ws, "credits exhausted")
+            # resumable: the client tops up and continues the SAME paid project,
+            # so keep the credits already spent (no refund).
+            _partial_finish(db, project, ws, "credits exhausted", refund=False)
             project.status = "needs_topup"  # override partial_ready: user can resume after top-up
             project.current_phase = None
             db.commit()
@@ -308,6 +319,16 @@ def _finalize_release(db: Session, project, ws: Path, decision: dict) -> None:
         project.not_released_reason = ("not released to client: "
                                        + "; ".join(reasons[:6] or ["incomplete result"]))
     db.commit()
+    # Fairness: the client can only download a `ready`/`release` result. If the
+    # project terminates undownloadable (blocked or partial), refund the credits
+    # they were charged per phase — they must not pay for what they cannot get.
+    if project.status in ("failed", "partial_ready"):
+        from .token_ledger import refund_project_credits
+        refund = refund_project_credits(db, project, f"not delivered: {verdict}")
+        if refund.get("refunded"):
+            log_event(db, project.id, "credits_refunded",
+                      f"Возврат {refund['refunded']} credits: результат не доставлен клиенту ({verdict})",
+                      refund, ws)
     log_event(db, project.id, "release_decision",
               f"Release decision: {verdict}", decision, ws)
     log_event(db, project.id, "packaged", "Final archive created", {}, ws)
@@ -323,6 +344,14 @@ def _stop_needs_repair(db: Session, project, ws: Path, phase_key: str, reason: s
     project.current_phase = None
     project.not_released_reason = f"internal repair needed after {phase_key}: {reason}"
     db.commit()
+    # earlier phases may already have been charged for proven progress; the
+    # client gets nothing final here, so make them whole.
+    from .token_ledger import refund_project_credits
+    refund = refund_project_credits(db, project, f"internal repair after {phase_key}")
+    if refund.get("refunded"):
+        log_event(db, project.id, "credits_refunded",
+                  f"Возврат {refund['refunded']} credits: {phase_key} без результата",
+                  refund, ws)
     log_event(db, project.id, "needs_internal_repair",
               f"Pipeline stopped: {phase_key} produced no usable output ({reason})",
               {"phase": phase_key, "reason": reason}, ws)
@@ -444,7 +473,7 @@ def _run_phase(db: Session, project, ws: Path, phase: ProjectPhase,
                       {"phase": key, "model": worker.get("model_name", "")}, ws)
             results = micro_build.run_micro_build(
                 db, ws, project, key, worker, agent.id if agent else "unknown",
-                float(phase.budget_limit_usd or 0))
+                float(phase.budget_limit_usd or 0), base_extra=extra)
             # None → the model returned no usable plan; fall back to one shot.
         elif len(runnable) > 1 and bool(get_setting(db, "enable_integration_plan")):
             # COORDINATOR step: one binding file plan before any builder runs,
@@ -545,6 +574,7 @@ def _run_phase(db: Session, project, ws: Path, phase: ProjectPhase,
                 and bool(get_setting(db, "enable_llm_integrator"))):
             spent += _run_integrator(db, project, ws, key, runnable, agents,
                                      integration_report, manifests, phase)
+        phase.spent_estimated_usd = spent  # integrator spend counts too
 
     # phase-specific side effects + exit criteria
     if key == "review_stop":
@@ -928,6 +958,27 @@ def _write_output_artifact(db: Session, project, ws: Path, phase_key: str,
         db.commit()
 
 
+def _review_severity(raw: str | None) -> str:
+    """Severity for an agent-reported review issue, capped at `major`.
+
+    Only deterministic build gates (GATE-* issues from build_integrity) may be
+    `critical`, because `critical` is the one severity that hard-blocks the
+    client download (see release_policy.evaluate). Review agents self-assign
+    severity and routinely over-escalate or hallucinate blockers that contradict
+    the passing gates — e.g. "missing requirements.txt" on a valid stdlib-only
+    project. Such an agent `critical` can never auto-close (no gate backs it),
+    so it would sink an otherwise shippable, gate-verified build forever. We keep
+    the finding visible and repair-eligible as `major`, but the block/no-block
+    authority stays with the objective gates.
+    """
+    value = (raw or "minor").strip().lower()
+    if value in ("critical", "blocker", "high", "major"):
+        return "major"
+    if value == "minor":
+        return "minor"
+    return "minor"
+
+
 def _collect_issues(db: Session, project, ws: Path, review_texts: list[str]) -> None:
     issues = []
     for text in review_texts:
@@ -943,7 +994,7 @@ def _collect_issues(db: Session, project, ws: Path, review_texts: list[str]) -> 
             continue
         seen.add(it.get("id"))
         db.add(Issue(project_id=project.id, phase_key="review_stop",
-                     severity=it.get("severity", "minor"),
+                     severity=_review_severity(it.get("severity")),
                      title=f"{it.get('id', '?')}: {it.get('title', 'untitled')}",
                      description=it.get("description", ""),
                      suggested_fix=it.get("suggested_fix", "")))
@@ -1006,12 +1057,23 @@ def _apply_repairs(db: Session, project, ws: Path, *, repo_changed: bool,
                "repo_changed": repo_changed}, ws)
 
 
-def _partial_finish(db: Session, project, ws: Path, reason: str) -> None:
+def _partial_finish(db: Session, project, ws: Path, reason: str,
+                    refund: bool = True) -> None:
     package(db, project, ws)
     project.status = "partial_ready"
     project.release_decision = "partial_release"
     project.current_phase = None
     project.not_released_reason = f"stopped early: {reason}"
     db.commit()
+    # A partial result is not client-downloadable, so refund what was charged —
+    # UNLESS the caller keeps the run resumable (e.g. needs_topup), where the
+    # client will continue the same paid project after topping up.
+    if refund:
+        from .token_ledger import refund_project_credits
+        r = refund_project_credits(db, project, f"partial: {reason}")
+        if r.get("refunded"):
+            log_event(db, project.id, "credits_refunded",
+                      f"Возврат {r['refunded']} credits: частичный результат не доставлен ({reason})",
+                      r, ws)
     log_event(db, project.id, "partial_ready",
               f"Pipeline stopped early ({reason}); partial package assembled", {}, ws)

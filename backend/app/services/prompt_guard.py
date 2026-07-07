@@ -15,8 +15,13 @@ _RULES: list[tuple[str, int, re.Pattern]] = [
         r"(?i)\b(reveal|show|print|repeat|leak|expose|output)\b.{0,30}"
         r"\b(system|hidden|internal|developer)\b.{0,10}\bprompt\b")),
     ("exfiltrate_secrets", 3, re.compile(
-        r"(?i)\b(print|reveal|show|leak|send|expose|dump|list)\b.{0,30}"
-        r"\b(secret|api[\s_-]?key|password|token|credential)s?\b")),
+        r"(?i)\b(print|reveal|show|leak|send|expose|dump|list|exfiltrate|steal|"
+        r"extract|scrape|obtain)\b.{0,30}"
+        # object: generic secret words, OR the concrete high-signal names this
+        # deployment actually holds (ENCRYPTION_SECRET is one _word_, so a bare
+        # `\bsecret` never matches it — spell the env names out).
+        r"(?:\b(secret|api[\s_-]?key|password|token|credential)s?\b|"
+        r"ENCRYPTION_SECRET|SECRET_KEY|\.env\b)")),
     ("read_env", 3, re.compile(
         r"(?i)(environment variables?|os\.environ|process\.env|printenv|\bgetenv\b|"
         r"read\b.{0,15}\b\.env\b)")),
@@ -35,7 +40,9 @@ _RULES: list[tuple[str, int, re.Pattern]] = [
     ("bypass_access_control", 3, re.compile(
         r"(?i)\b(bypass|disable|skip|circumvent)\b.{0,20}"
         r"\b(access control|authorization|authentication|permission|ownership)s?\b")),
-    ("jailbreak", 2, re.compile(r"(?i)\b(jailbreak|DAN mode|do anything now)\b")),
+    ("jailbreak", 2, re.compile(
+        r"(?i)\b(jailbreak|DAN mode|do anything now)\b"
+        r"|(?:you are now|act as|pretend to be|enter)\s+DAN\b")),
 ]
 
 

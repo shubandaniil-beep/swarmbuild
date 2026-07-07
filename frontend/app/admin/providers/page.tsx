@@ -220,6 +220,26 @@ export default function AdminProviders() {
     }
   }
 
+  async function syncModels(id: string) {
+    try {
+      setMessage("Синхронизирую каталог моделей провайдера...");
+      const res = await api<{
+        live_models: number;
+        added: string[];
+        updated: string[];
+        disabled_deprecated: string[];
+      }>(`/api/admin/providers/${id}/sync-models`, { method: "POST" });
+      setMessage(
+        `Каталог синхронизирован: ${res.live_models} живых моделей, ` +
+        `добавлено ${res.added.length}, обновлено ${res.updated.length}, ` +
+        `deprecated ${res.disabled_deprecated.length}.`,
+      );
+      await load();
+    } catch (err) {
+      setError(String(err));
+    }
+  }
+
   return (
     <div className="space-y-8">
       <div>
@@ -286,6 +306,11 @@ export default function AdminProviders() {
                     <button onClick={() => testProvider(p.id)} className="btn-ghost px-3 py-2 text-sm">
                       Test API
                     </button>
+                    {p.provider_type === "groq" && (
+                      <button onClick={() => syncModels(p.id)} className="btn-ghost px-3 py-2 text-sm">
+                        Sync models
+                      </button>
+                    )}
                     <button
                       onClick={() => update(p, { enabled: !p.enabled })}
                       className={`rounded-lg border px-3 py-2 text-sm ${

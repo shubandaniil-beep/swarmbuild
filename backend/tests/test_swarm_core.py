@@ -65,3 +65,44 @@ def test_rotation_roles_change_between_phases():
     # every agent should have worked in more than one role across the pipeline
     for model, mandates in mandate_history.items():
         assert len(mandates) > 1, f"{model} was stuck in a single role: {mandates}"
+
+
+def _mixed_pool() -> list[dict]:
+    # one strong model among weak ones, each a distinct route
+    return [
+        {"id": "strong", "model_name": "opus", "provider": "anthropic",
+         "provider_id": "pa", "cost_level": "high"},
+        {"id": "w1", "model_name": "b8", "provider": "groq", "provider_id": "pg", "cost_level": "low"},
+        {"id": "w2", "model_name": "mini", "provider": "groq", "provider_id": "pg2", "cost_level": "low"},
+        {"id": "w3", "model_name": "free1", "provider": "openrouter", "provider_id": "po", "cost_level": "free"},
+    ]
+
+
+def test_strongest_model_authors_the_deliverable_phases():
+    """Even in a weak-heavy pool the strongest model must hold the primary author
+    mandate on deliverable-producing phases (spec/build/repair), so the output
+    stays comprehensive. Checkers still differ from the author."""
+    from app.services.role_rotation import _PRIMARY_AUTHOR
+    plan = build_rotation_plan(
+        ["spec_war", "build_sprint", "repair_sprint"], _mixed_pool())
+    for phase in plan:
+        assignments = phase["assignments"]
+        author = next(a for a in assignments
+                      if a["mandate"] == _PRIMARY_AUTHOR[phase["phase"]])
+        assert author["model_id"] == "strong", (phase["phase"], author)
+        # independence still holds: judge/reviewer are not the author's route
+        for a in assignments:
+            if a["mandate"] in ("judge", "reviewer"):
+                assert a["model_id"] != "strong"
+
+
+def test_capability_routing_is_noop_for_equal_strength_pool():
+    """A homogeneous pool (no strength signal) must keep pure rotation — the
+    capability step only reorders when a strictly stronger model exists."""
+    plan = build_rotation_plan(plan_swarm(100)[1], _pool(4))
+    # every agent still rotates through more than one role (unchanged invariant)
+    hist: dict[str, set[str]] = {}
+    for phase in plan:
+        for a in phase["assignments"]:
+            hist.setdefault(a["model_id"], set()).add(a["mandate"])
+    assert all(len(v) > 1 for v in hist.values())

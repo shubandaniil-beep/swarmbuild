@@ -13,6 +13,9 @@ _SECRET_RULES: list[tuple[str, re.Pattern]] = [
     ("anthropic_key", re.compile(r"sk-ant-[A-Za-z0-9_\-]{20,}")),
     ("openai_key", re.compile(r"sk-(?:proj-)?[A-Za-z0-9]{20,}")),
     ("google_gemini_key", re.compile(r"AIza[0-9A-Za-z_\-]{35}")),
+    # Newer Google AI / Gemini key family (e.g. `AQ.Ab8...`) — not an `AIza` key.
+    # High-signal: the literal `AQ.` prefix followed by a long base64url body.
+    ("google_aq_key", re.compile(r"\bAQ\.[A-Za-z0-9_\-]{20,}")),
     ("aws_access_key", re.compile(r"AKIA[0-9A-Z]{16}")),
     ("slack_token", re.compile(r"xox[baprs]-[A-Za-z0-9\-]{10,}")),
     ("telegram_bot_token", re.compile(r"\b\d{6,10}:[A-Za-z0-9_\-]{30,}\b")),

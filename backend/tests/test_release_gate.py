@@ -7,6 +7,7 @@ Covers the trust boundary end-to-end at the seams:
 * download gate — only status=ready + release_decision=release is downloadable
   by a client; partial/draft is admin-only (§7.10).
 """
+import json
 import zipfile
 from pathlib import Path
 
@@ -217,3 +218,57 @@ def test_released_project_is_downloadable(client):
 
     res = c.get(f"/api/projects/{pid}/download", headers=hu)
     assert res.status_code == 200
+
+
+# --------------------------------------------------------------------------- #
+# review-issue severity — agents may not fabricate a release-blocking critical #
+# --------------------------------------------------------------------------- #
+
+def test_agent_review_critical_is_capped_to_major_and_does_not_block(client):
+    """A reviewer that self-labels a hallucinated finding "critical" (e.g.
+    "missing requirements.txt" on a valid stdlib-only project) must not
+    hard-block a build whose deterministic gates all pass. Only GATE-* issues
+    carry `critical`; agent findings cap at `major` (advisory, repair-eligible).
+    """
+    from app.services.phase_orchestrator import _collect_issues, _review_severity
+    from app.services.release_policy import evaluate
+
+    # pure helper: agent over-escalation is capped, real minor kept
+    assert _review_severity("critical") == "major"
+    assert _review_severity("blocker") == "major"
+    assert _review_severity("major") == "major"
+    assert _review_severity("minor") == "minor"
+    assert _review_severity(None) == "minor"
+
+    uid, _ = _auth("review-sev@example.com")
+    db = SessionLocal()
+    try:
+        p = create_project(db, "Stdlib CLI", "A tiny stdlib-only Python CLI.", 1,
+                           [], "auto", "auto", "non_technical", "", user_id=uid)
+        pid = p.id
+
+        review = "Findings:\n```json\n" + json.dumps([
+            {"id": "ISSUE-001", "title": "Missing requirements.txt",
+             "severity": "critical", "description": "no manifest",
+             "suggested_fix": "add requirements.txt"},
+        ]) + "\n```\n"
+        _collect_issues(db, p, workspace_path(pid), [review])
+
+        created = db.query(Issue).filter(Issue.project_id == pid).all()
+        assert len(created) == 1
+        assert created[0].severity == "major"  # not critical
+
+        # a real deliverable tree with all doc checks satisfied
+        ws = workspace_path(pid)
+        (ws / "repo").mkdir(parents=True, exist_ok=True)
+        (ws / "repo" / "main.py").write_text("print('hi')\n")
+        (ws / "repo" / "README.md").write_text("# App\n\nRun: `python main.py`\n")
+        (ws / "artifacts").mkdir(parents=True, exist_ok=True)
+        for name in ("README.md", "INSTALL.md", "limitations.md"):
+            (ws / "artifacts" / name).write_text("# doc\n")
+
+        decision = evaluate(db, pid, ws, is_code_project=True)
+        assert decision["critical_issues"] == 0
+        assert decision["decision"] != "blocked"
+    finally:
+        db.close()
