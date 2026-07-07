@@ -7,6 +7,14 @@ export default function CreditCard({ project }: { project: Project }) {
   const perUsd = project.credits_per_usd || 100;
   const pct = estimate ? Math.min(100, (spent / estimate) * 100) : 0;
   const fmt = (n: number) => n.toLocaleString("ru-RU");
+  const zeroReason = project.zero_credit_reason;
+  const zeroLabels: Record<string, string> = {
+    admin_bypass: "0 списано: admin bypass",
+    no_chargeable_progress: "0 списано: не было оплачиваемого прогресса",
+    not_finished_yet: "0 списано: проект ещё не завершён",
+    billing_error_candidate: "0 списано: проверить billing",
+    not_released_to_client: "0 списано: релиз не выдан клиенту",
+  };
 
   return (
     <div className="border border-zinc-800 rounded-xl p-4">
@@ -26,6 +34,11 @@ export default function CreditCard({ project }: { project: Project }) {
         {remaining !== null && <span>баланс: {fmt(remaining)}</span>}
         <span>{perUsd} credits = $1</span>
         {project.demo_run && <span className="text-amber-300">trial-запуск из стартовых credits</span>}
+        {spent === 0 && zeroReason && (
+          <span className={zeroReason === "billing_error_candidate" ? "text-red-300" : "text-zinc-400"}>
+            {zeroLabels[zeroReason] || `0 списано: ${zeroReason}`}
+          </span>
+        )}
       </div>
     </div>
   );

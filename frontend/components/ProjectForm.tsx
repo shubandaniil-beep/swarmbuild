@@ -83,8 +83,65 @@ const TYPES = [
   ["custom", "Custom"],
 ] as const;
 
+function MagicStart() {
+  const router = useRouter();
+  const [prompt, setPrompt] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  async function go() {
+    if (prompt.trim().length < 10) {
+      setError("Опишите идею хотя бы одним предложением.");
+      return;
+    }
+    setBusy(true);
+    setError("");
+    try {
+      const res = await api<{ project_id: string; token_balance?: number }>(
+        "/api/projects/instant",
+        { method: "POST", body: JSON.stringify({ prompt }) },
+      );
+      if (typeof res.token_balance === "number") {
+        cacheUser({ token_balance: res.token_balance });
+      }
+      router.push(`/projects/${res.project_id}`);
+    } catch (err) {
+      setError(String(err));
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="rounded-2xl border border-amber-400/30 bg-amber-400/5 p-6 shadow-[0_0_40px_rgba(245,158,11,0.08)]">
+      <p className="kicker mb-1">Проект под ключ</p>
+      <h2 className="text-xl font-semibold">Опишите идею — остальное сделаем мы</h2>
+      <p className="mt-1 text-sm text-zinc-500">
+        Система сама выберет тип проекта, пакет и маршрут сборки, проверит результат
+        и отдаст готовый архив. Ничего настраивать не нужно.
+      </p>
+      <textarea
+        value={prompt}
+        onChange={(e) => setPrompt(e.target.value)}
+        rows={4}
+        className="input mt-4"
+        placeholder="Например: нужен Telegram-бот для записи клиентов автомойки с калькулятором стоимости…"
+      />
+      {error && <p className="text-red-400 text-sm mt-2">{error}</p>}
+      <button
+        type="button"
+        onClick={go}
+        disabled={busy}
+        className="btn-primary w-full sm:w-auto px-10 py-4 mt-4 text-base"
+      >
+        {busy ? "Запускаю сборку…" : "✨ Создать проект под ключ"}
+      </button>
+    </div>
+  );
+}
+
 export default function ProjectForm() {
   const router = useRouter();
+  const [advanced, setAdvanced] = useState(false);
   const [title, setTitle] = useState("");
   const [brief, setBrief] = useState("");
   const [goal, setGoal] = useState("");
@@ -147,8 +204,30 @@ export default function ProjectForm() {
 
   const input = "input";
 
+  if (!advanced) {
+    return (
+      <div className="space-y-6">
+        <MagicStart />
+        <button
+          type="button"
+          onClick={() => setAdvanced(true)}
+          className="text-sm text-zinc-500 hover:text-zinc-300 underline underline-offset-4"
+        >
+          Настроить вручную (тип, бюджет, результаты)
+        </button>
+      </div>
+    );
+  }
+
   return (
     <form onSubmit={submit} className="space-y-6">
+      <button
+        type="button"
+        onClick={() => setAdvanced(false)}
+        className="text-sm text-zinc-500 hover:text-zinc-300 underline underline-offset-4"
+      >
+        ← Вернуться к режиму «под ключ»
+      </button>
       <div>
         <label className="block text-sm text-zinc-400 mb-1">Название проекта</label>
         <input value={title} onChange={(e) => setTitle(e.target.value)} required

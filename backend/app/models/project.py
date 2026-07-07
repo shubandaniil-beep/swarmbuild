@@ -30,13 +30,27 @@ class Project(Base):
     deleted: Mapped[bool] = mapped_column(Boolean, default=False)
     status: Mapped[str] = mapped_column(String, default="draft")
     complexity: Mapped[str] = mapped_column(String, default="medium")
+    # "" = use the global execution_mode setting; "single_agent" = fast mode
+    # (one coherent model builds the whole project instead of a swarm of
+    # fragments); "swarm" = force the full rotating swarm.
+    execution_mode: Mapped[str] = mapped_column(String, default="")
     swarm_size: Mapped[int] = mapped_column(Integer, default=4)
     current_phase: Mapped[str | None] = mapped_column(String, nullable=True)
+    # Binding release gate (spec §7.10): a client may only download project.zip
+    # when status == "ready" AND release_decision == "release". Anything else
+    # (partial_release / blocked / needs_internal_repair) is admin-only.
+    release_decision: Mapped[str | None] = mapped_column(String, nullable=True)
+    not_released_reason: Mapped[str] = mapped_column(Text, default="")
     # credit accounting: user sees credits, founder sees usd + margin
     credits_estimate: Mapped[int] = mapped_column(Integer, default=0)
     credits_spent: Mapped[int] = mapped_column(Integer, default=0)
     estimated_usd_cost: Mapped[float] = mapped_column(Numeric(10, 6), default=0)
     demo_run: Mapped[bool] = mapped_column(Boolean, default=False)  # one-time trial slot; still burns credits
+    # client = normal user billing; admin_bypass = founder/internal project with
+    # no client charge; client_simulation = admin-created test project that burns
+    # credits exactly like a client run.
+    billing_mode: Mapped[str] = mapped_column(String, default="client")
+    billing_note: Mapped[str] = mapped_column(Text, default="")
     risk_level: Mapped[str] = mapped_column(String, default="low")  # prompt-injection risk: low|medium|high
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, onupdate=now)

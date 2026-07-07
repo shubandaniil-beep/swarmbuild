@@ -6,6 +6,7 @@ from .base import (
     BaseProvider,
     ProviderHTTPError,
     ProviderResult,
+    guarded_urlopen,
     parse_retry_after,
     read_json_with_deadline,
 )
@@ -38,7 +39,31 @@ def _message_text(message: dict) -> str:
                 parts.append(item["text"])
         if parts:
             return "".join(parts)
+    if message.get("tool_calls"):
+        # e.g. Gemini's OpenAI shim: the model decided to "call a tool" even
+        # though no tools were offered → no usable text in the choice.
+        raise ToolUseMismatchError("model attempted a tool call but no tools are configured")
     raise RuntimeError("provider returned a choice without message.content")
+
+
+class ToolUseMismatchError(RuntimeError):
+    """The model emitted (or the backend rejected) a tool call in a plain-text
+    conversation — e.g. "Tool choice is none, but model called a tool". Not a
+    key/quota fault: retried once with an explicit no-tools instruction."""
+
+
+_TOOL_MISMATCH_MARKERS = ("tool choice is none", "model called a tool",
+                          "tool call", "tool_calls", "function call", "function_call")
+
+
+def _is_tool_mismatch(message: str) -> bool:
+    text = (message or "").lower()
+    return any(marker in text for marker in _TOOL_MISMATCH_MARKERS)
+
+
+_NO_TOOLS_NUDGE = ("\n\nCRITICAL: You have NO tools or functions available in this "
+                   "conversation. Respond with plain text (markdown) only; never "
+                   "emit a tool call or function call.")
 
 
 class OpenAICompatibleProvider(BaseProvider):
@@ -50,6 +75,23 @@ class OpenAICompatibleProvider(BaseProvider):
         self.api_key = api_key
 
     def complete(self, system: str, user: str, context: dict | None = None) -> ProviderResult:
+        try:
+            return self._complete_once(system, user)
+        except (ToolUseMismatchError, ProviderHTTPError, RuntimeError) as exc:
+            # Tool-config compatibility: some backends 400 with "Tool choice is
+            # none, but model called a tool" (or return a tool_calls-only
+            # choice). The request is fine — the model misbehaved. One retry
+            # with an explicit no-tools instruction resolves it; anything else
+            # re-raises for the normal key/model failover to judge.
+            status = getattr(exc, "status_code", 0)
+            retryable_http = isinstance(exc, ProviderHTTPError) and 400 <= status < 500
+            if isinstance(exc, ToolUseMismatchError) or \
+                    ((retryable_http or not isinstance(exc, ProviderHTTPError))
+                     and _is_tool_mismatch(str(exc))):
+                return self._complete_once(system + _NO_TOOLS_NUDGE, user)
+            raise
+
+    def _complete_once(self, system: str, user: str) -> ProviderResult:
         payload = {
             "model": self.card["model_name"],
             "temperature": self.card.get("default_temperature", 0.3),
@@ -69,6 +111,7 @@ class OpenAICompatibleProvider(BaseProvider):
                 headers["HTTP-Referer"] = referer
             if title:
                 headers["X-OpenRouter-Title"] = title
+        allow_private = bool(self.card.get("allow_private_provider_urls"))
         req = urllib.request.Request(
             f"{self.base_url}/chat/completions",
             data=json.dumps(payload).encode(),
@@ -76,7 +119,7 @@ class OpenAICompatibleProvider(BaseProvider):
         )
         timeout = float(self.card.get("timeout_seconds", 30))
         try:
-            with urllib.request.urlopen(req, timeout=timeout) as resp:
+            with guarded_urlopen(req, timeout, allow_private) as resp:
                 data = read_json_with_deadline(resp, timeout)
         except urllib.error.HTTPError as exc:
             message = _provider_error_from_body(exc.read(65536))

@@ -4,7 +4,7 @@ from sqlalchemy.orm import Session
 
 from ..database import get_db
 from ..models import CreditTopup, User
-from ..services import credit_pricing
+from ..services import credit_pricing, pay_codes
 from ..services.settings_service import get_setting
 from ..services.user_activity import log_user_activity
 from .deps import get_current_user
@@ -43,6 +43,7 @@ def _pack_out(db: Session, pack: dict) -> dict:
 @router.get("/summary")
 def summary(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     credits_per_usd = credit_pricing.tokens_per_usd(db)
+    pay_code = pay_codes.ensure_pay_code(db, user)
     return {
         "token_balance": user.token_balance or 0,
         "demo_generations_remaining": user.demo_generations_remaining or 0,
@@ -50,9 +51,11 @@ def summary(user: User = Depends(get_current_user), db: Session = Depends(get_db
         "credit_value_usd": round(1 / max(credits_per_usd, 1), 4),
         "currency": get_setting(db, "default_currency") or "USD",
         "packs": [_pack_out(db, p) for p in TOPUP_PACKS],
+        "pay_code": pay_code,
+        "payment_bot_url": str(get_setting(db, "telegram_payment_bot_url") or "").strip(),
         "payment_provider": "telegram_stars",
-        "payment_status": "manual_pending",
-        "payment_note": "Telegram Stars подключается через бота; сейчас создаётся заявка на пополнение.",
+        "payment_status": "bot_auto",
+        "payment_note": "Отправьте свой код боту оплаты. После оплаты credits начислятся автоматически.",
     }
 
 

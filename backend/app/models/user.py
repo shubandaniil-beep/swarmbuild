@@ -26,6 +26,11 @@ class User(Base):
     lifetime_tokens_granted: Mapped[int] = mapped_column(Integer, default=100)
     lifetime_tokens_spent: Mapped[int] = mapped_column(Integer, default=0)
     demo_generations_remaining: Mapped[int] = mapped_column(Integer, default=1)
+    # Permanent personal payment code the user sends to the payment bot; the
+    # bot uses it to link this account (see telegram_id) once, then credits by id.
+    pay_code: Mapped[str] = mapped_column(String(12), default="", index=True)
+    # Telegram user id linked via the pay_code; the bot credits by this id.
+    telegram_id: Mapped[str] = mapped_column(String(32), default="", index=True)
     signup_fingerprint: Mapped[str] = mapped_column(String, default="")
     signup_ip: Mapped[str] = mapped_column(String, default="")
     token_version: Mapped[int] = mapped_column(Integer, default=0)

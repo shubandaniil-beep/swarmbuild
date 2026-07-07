@@ -176,6 +176,8 @@ def seed_defaults(db: Session) -> None:
         db.commit()
     _disable_legacy_dev_admin(db, admin_email)
     _backfill_user_credits(db)
+    from .pay_codes import backfill_pay_codes
+    backfill_pay_codes(db)
     _mark_interrupted_projects(db)
 
 
@@ -352,33 +354,94 @@ def _backfill_user_credits(db: Session) -> None:
         db.commit()
 
 
+_MAX_AUTO_RESUMES = 3
+# A project that produced activity newer than this is treated as still alive —
+# a live worker (this process, or another on a multi-worker deploy) is on it, so
+# re-queuing it would run its phases twice. Only projects silent past this window
+# are considered orphaned by a restart.
+_RESUME_STALE_SECONDS = 180
+
+
+def _seconds_since(dt) -> float:
+    """Age in seconds of a possibly-naive timestamp, treated as UTC."""
+    from datetime import UTC, datetime
+    if dt is None:
+        return float("inf")
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=UTC)
+    return (datetime.now(UTC) - dt).total_seconds()
+
+
 def _mark_interrupted_projects(db: Session) -> None:
-    """After a backend restart, in-memory worker threads are gone. Never leave
-    projects looking live when there is no worker capable of completing them."""
+    """After a backend restart, in-memory worker threads are gone. A restart is
+    an infrastructure event, never a client-facing failure: interrupted projects
+    are re-queued and resume from their last unfinished phase (done phases are
+    skipped by the orchestrator). Only a project that keeps dying across
+    several restarts is parked as failed — a crash loop must not burn budget
+    forever."""
+    from ..models import Event
+    from .event_log import log_event
+    from .project_intake import workspace_path
+
     interrupted = (db.query(Project)
                    .filter(Project.deleted.is_(False),
-                           Project.status.in_(("queued", "running", "packaging")))
+                           Project.status.in_(("queued", "running", "packaging", "repairing")))
                    .all())
     if not interrupted:
         return
-    from .event_log import log_event
-    from .project_intake import workspace_path
+    from ..workers.project_worker import enqueue, is_running
 
     for project in interrupted:
         previous = project.status
         current_phase = project.current_phase
-        project.status = "failed"
-        project.current_phase = None
+
+        # Liveness guard — never re-queue a project that is still being worked
+        # on, or the orchestrator runs its phases twice (duplicate issues, wasted
+        # model spend). (1) this process is actively running it; (2) it produced
+        # activity within the freshness window, so a live worker (here or on
+        # another process in a multi-worker deploy) is probably still on it.
+        if is_running(project.id):
+            continue
+        last_event = (db.query(Event.created_at)
+                      .filter(Event.project_id == project.id)
+                      .order_by(Event.created_at.desc()).first())
+        last_at = last_event[0] if last_event else project.created_at
+        if _seconds_since(last_at) < _RESUME_STALE_SECONDS:
+            continue
+
+        resumes = (db.query(Event)
+                   .filter(Event.project_id == project.id,
+                           Event.event_type == "worker_resumed").count())
+        # unfinished phases go back to pending so the orchestrator re-runs them
         for phase in (db.query(ProjectPhase)
                       .filter(ProjectPhase.project_id == project.id,
                               ProjectPhase.status.in_(("queued", "running")))
                       .all()):
-            phase.status = "failed"
+            phase.status = "pending"
+
+        if resumes >= _MAX_AUTO_RESUMES:
+            project.status = "failed"
+            project.current_phase = None
+            project.not_released_reason = "internal: worker interrupted repeatedly"
+            db.commit()
+            try:
+                log_event(db, project.id, "worker_resume_exhausted",
+                          f"Auto-resume limit reached ({_MAX_AUTO_RESUMES}); parked as failed",
+                          {"previous_status": previous, "current_phase": current_phase},
+                          workspace_path(project.id))
+            except OSError:
+                pass
+            continue
+
+        project.status = "queued"
+        project.current_phase = None
         db.commit()
         try:
-            log_event(db, project.id, "worker_interrupted",
-                      "Backend restarted before the worker finished; restart the project to resume.",
+            log_event(db, project.id, "worker_resumed",
+                      f"Worker interrupted by restart; auto-resuming from phase "
+                      f"{current_phase or 'start'} (attempt {resumes + 1}/{_MAX_AUTO_RESUMES})",
                       {"previous_status": previous, "current_phase": current_phase},
                       workspace_path(project.id))
         except OSError:
             pass
+        enqueue(project.id)

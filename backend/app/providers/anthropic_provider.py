@@ -6,6 +6,7 @@ from .base import (
     BaseProvider,
     ProviderHTTPError,
     ProviderResult,
+    guarded_urlopen,
     parse_retry_after,
     read_json_with_deadline,
 )
@@ -41,6 +42,7 @@ class AnthropicCompatibleProvider(BaseProvider):
             "system": system,
             "messages": [{"role": "user", "content": user}],
         }
+        allow_private = bool(self.card.get("allow_private_provider_urls"))
         req = urllib.request.Request(
             f"{self.base_url}/v1/messages",
             data=json.dumps(payload).encode(),
@@ -51,7 +53,7 @@ class AnthropicCompatibleProvider(BaseProvider):
         )
         timeout = float(self.card.get("timeout_seconds", 30))
         try:
-            with urllib.request.urlopen(req, timeout=timeout) as resp:
+            with guarded_urlopen(req, timeout, allow_private) as resp:
                 data = read_json_with_deadline(resp, timeout)
         except urllib.error.HTTPError as exc:
             message = _provider_error_from_body(exc.read(65536))

@@ -31,6 +31,64 @@ def _prompt(name: str) -> str:
     return p.read_text() if p.exists() else ""
 
 
+def _clip(text: str, limit: int) -> str:
+    text = (text or "").strip()
+    return text if len(text) <= limit else text[:limit].rstrip() + "\n…[truncated]"
+
+
+def _render_context_sections(extra: dict) -> str:
+    """Serialize orchestrator-supplied working context into the user prompt.
+
+    Real providers only ever see `system` + `user` — the `context` dict is
+    consumed by the mock provider alone. Anything the reviewer/repairer must
+    act on (open issues, failed gates, the actual repo listing, the spec) has
+    to be rendered into the message, or production models fly blind.
+    """
+    sections: list[str] = []
+
+    issues = extra.get("open_issues") or []
+    if issues:
+        lines = []
+        for i in issues[:20]:
+            lines.append(f"- [{i.get('severity', '?')}] {i.get('title', 'untitled')}")
+            if i.get("description"):
+                lines.append(f"  problem: {_clip(i['description'], 400)}")
+            if i.get("suggested_fix"):
+                lines.append(f"  suggested fix: {_clip(i['suggested_fix'], 300)}")
+        sections.append("## Open issues — fix exactly these\n" + "\n".join(lines))
+
+    gates = extra.get("gate_failures") or []
+    if gates:
+        lines = [f"- {g.get('name', '?')}: {_clip(g.get('detail', ''), 300)}" for g in gates[:12]]
+        sections.append("## Failed deterministic checks (must pass before release)\n"
+                        + "\n".join(lines))
+    elif extra.get("build_gate_summary"):
+        summary = extra["build_gate_summary"]
+        sections.append("## Deterministic check summary\n"
+                        f"passed: {summary.get('passed')}\nfailed: {summary.get('failed')}")
+
+    repo_files = extra.get("repo_files") or []
+    if repo_files:
+        sections.append("## Current repo files\n" + "\n".join(f"- {f}" for f in repo_files[:80]))
+
+    if extra.get("spec_excerpt"):
+        sections.append("## Specification excerpt\n" + _clip(extra["spec_excerpt"], 2500))
+
+    if extra.get("build_log_tail"):
+        sections.append("## Recent build/check log\n" + _clip(extra["build_log_tail"], 1500))
+
+    if extra.get("file_rules"):
+        sections.append("## Integration contract\n" + _clip(extra["file_rules"], 3000))
+
+    if extra.get("integration_plan"):
+        sections.append("## Integration plan\n" + _clip(extra["integration_plan"], 2500))
+
+    if extra.get("micro_task"):
+        sections.append("## Current micro-task\n" + _clip(extra["micro_task"], 2500))
+
+    return ("\n\n" + "\n\n".join(sections)) if sections else ""
+
+
 def _estimate_cost(card: dict, input_tokens: int, output_tokens: int) -> float:
     return round(
         input_tokens / 1_000_000 * card.get("input_cost_per_1m", 0)
@@ -210,7 +268,8 @@ def run_agent(db: Session, workspace: Path, project, phase_key: str,
     user = (f"Phase: {phase_key}\nMandate: {mandate}\n"
             f"Allowed access: {', '.join(context['access'])}\n\n"
             f"Build style: {build_style}\n\n"
-            f"Project: {project.title}\n\nBrief:\n{project.brief}\n")
+            f"Project: {project.title}\n\nBrief:\n{project.brief}\n"
+            + _render_context_sections(extra_context or {}))
 
     status = "success"
     route = _route_base(card)
@@ -277,6 +336,10 @@ def run_agent(db: Session, workspace: Path, project, phase_key: str,
                           workspace)
                 try:
                     result, route = _call_with_pool(db, alt, system, user, context)
+                    # A mock standing in for a failed real model is a diagnostic
+                    # draft, never billable client progress — the orchestrator
+                    # must not count its files as "the model built something".
+                    result.status = "mock_fallback"
                     status = f"failover:{alt['model_name']}"
                     card = alt
                     error_message = ""
@@ -320,8 +383,11 @@ def run_agent(db: Session, workspace: Path, project, phase_key: str,
     # Real providers return prose with fenced code blocks; extract the files the
     # agent actually wrote so build/repair output lands in repo/ instead of being
     # discarded. Mock already fills result.files, so only parse when it's empty.
+    # Any mandate may emit code during build/repair phases (a "lead" that wrote
+    # the app into its implementation log still built the app).
     if (not result.files
-            and mandate in ("builder", "repairer")
+            and (mandate in ("builder", "repairer")
+                 or phase_key in ("build_sprint", "repair_sprint"))
             and context.get("requires_codebase", True)):
         from ..lib.file_extractor import extract_repo_files
         result.files = extract_repo_files(result.text)

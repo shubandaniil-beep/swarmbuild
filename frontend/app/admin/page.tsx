@@ -17,6 +17,12 @@ interface Stats {
   outstanding_credits: number;
   credits_spent_usd_value: number;
   gross_margin_usd: number;
+  admin_bypass_projects: number;
+  client_billed_projects: number;
+  client_simulation_projects: number;
+  client_zero_credit_projects: number;
+  released_zero_credit_projects: number;
+  zero_credit_status: string;
   topups_pending: number;
   topups_paid_usd: number;
   users_total: number;
@@ -54,6 +60,8 @@ export default function AdminDashboard() {
   if (!stats) return <p className="text-zinc-500">Загрузка…</p>;
 
   const fmt = (n: number) => n.toLocaleString("ru-RU");
+  const money = (n: number) =>
+    `$${n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
   return (
     <div className="space-y-8">
@@ -74,16 +82,33 @@ export default function AdminDashboard() {
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
           <StatCard label={`${stats.credits_per_usd} credits = $1`} value={fmt(stats.outstanding_credits)} />
           <StatCard label="credits spent пользователями" value={fmt(stats.credits_spent)} />
-          <StatCard label="USD value списанных credits" value={`$${stats.credits_spent_usd_value}`} tone="green" />
-          <StatCard label="gross margin estimate" value={`$${stats.gross_margin_usd}`} tone={stats.gross_margin_usd >= 0 ? "green" : "red"} />
+          <StatCard label="USD value списанных credits" value={money(stats.credits_spent_usd_value)} tone="green" />
+          <StatCard label="gross margin estimate" value={money(stats.gross_margin_usd)} tone={stats.gross_margin_usd >= 0 ? "green" : "red"} />
         </div>
+      </section>
+
+      <section>
+        <p className="kicker mb-3">Почему списано 0</p>
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          <StatCard label="client-billed projects" value={stats.client_billed_projects} tone="green" />
+          <StatCard label="admin bypass projects" value={stats.admin_bypass_projects} tone={stats.admin_bypass_projects ? "accent" : "zinc"} />
+          <StatCard label="client simulation tests" value={stats.client_simulation_projects} />
+          <StatCard label="released client 0 credits" value={stats.released_zero_credit_projects} tone={stats.released_zero_credit_projects ? "red" : "zinc"} />
+        </div>
+        <p className={stats.zero_credit_status === "billing_error" ? "mt-3 text-sm text-red-300" : "mt-3 text-sm text-zinc-500"}>
+          {stats.zero_credit_status === "billing_error"
+            ? "Есть релизованный клиентский проект с 0 credits: это billing anomaly, нужно проверить."
+            : stats.zero_credit_status === "admin_bypass_only"
+              ? "0 credits объясняется founder/admin bypass, клиентские списания не сломаны."
+              : "Критичных zero-credit billing anomalies не найдено."}
+        </p>
       </section>
 
       <section>
         <p className="kicker mb-3">Пополнения</p>
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
           <StatCard label="pending top-ups" value={stats.topups_pending} tone={stats.topups_pending ? "accent" : "zinc"} />
-          <StatCard label="paid top-ups USD" value={`$${stats.topups_paid_usd}`} tone="green" />
+          <StatCard label="paid top-ups USD" value={money(stats.topups_paid_usd)} tone="green" />
           <StatCard label="credits granted total" value={fmt(stats.credits_granted)} />
         </div>
       </section>
@@ -96,7 +121,7 @@ export default function AdminDashboard() {
           <StatCard label="partial ready" value={stats.projects_partial_ready} />
           <StatCard label="failed" value={stats.projects_failed} tone={stats.projects_failed ? "red" : "zinc"} />
           <StatCard label="в работе" value={stats.projects_running} />
-          <StatCard label="estimated model spend" value={`$${stats.estimated_spend_usd}`} />
+          <StatCard label="estimated model spend" value={money(stats.estimated_spend_usd)} />
           <StatCard label="пользователей" value={stats.users_total} />
           <StatCard label="user activity events" value={stats.user_activity_events} />
           <StatCard label="active providers" value={stats.providers_active} />

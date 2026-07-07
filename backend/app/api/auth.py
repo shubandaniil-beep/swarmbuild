@@ -1,3 +1,4 @@
+import secrets
 from datetime import UTC, datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
@@ -8,13 +9,23 @@ from ..database import get_db
 from ..lib import rate_limit
 from ..lib.security import TOKEN_TTL_SECONDS, create_token, hash_password, verify_password
 from ..models import User
-from ..services import credit_pricing
+from ..services import credit_pricing, pay_codes
 from ..services.settings_service import get_setting
 from ..services.token_ledger import ensure_credit_columns
 from ..services.user_activity import log_user_activity
 from .deps import SESSION_COOKIE, get_current_user
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
+
+# A throwaway hash so verify_password always runs the full PBKDF2 cost even when
+# the email doesn't exist (or isn't an admin). Without it, the short-circuit
+# `not user or not verify_password(...)` skips hashing for unknown/non-admin
+# emails, and the response-time gap turns login/admin-login into an account
+# (and admin-account) enumeration oracle.
+_DUMMY_PASSWORD_HASH = hash_password(secrets.token_hex(16))
+
+_FORWARDED_CLIENT_IP_HEADERS = ("x-forwarded-for", "x-real-ip", "forwarded")
+_UNTRUSTED_FORWARDED_IP = "untrusted-forwarded-header"
 
 
 class Credentials(BaseModel):
@@ -23,13 +34,25 @@ class Credentials(BaseModel):
     fingerprint: str = Field(default="", max_length=128)
 
 
+def _is_https(request: Request) -> bool:
+    """True when the client-facing connection is HTTPS. Behind a TLS-terminating
+    reverse proxy `request.url.scheme` is `http`, so also honour the
+    `X-Forwarded-Proto` header the proxy sets — otherwise the session cookie
+    never gets the Secure flag on a real HTTPS deployment and could leak over a
+    downgraded http request."""
+    if request.url.scheme == "https":
+        return True
+    proto = request.headers.get("x-forwarded-proto", "")
+    return proto.split(",")[0].strip().lower() == "https"
+
+
 def _set_session_cookie(response: Response, request: Request, token: str) -> None:
     response.set_cookie(
         SESSION_COOKIE,
         token,
         max_age=TOKEN_TTL_SECONDS,
         httponly=True,
-        secure=request.url.scheme == "https",
+        secure=_is_https(request),
         samesite="lax",
         path="/",
     )
@@ -37,6 +60,14 @@ def _set_session_cookie(response: Response, request: Request, token: str) -> Non
 
 def _clear_session_cookie(response: Response) -> None:
     response.delete_cookie(SESSION_COOKIE, path="/", samesite="lax")
+
+
+def _forwarded_for_value(value: str) -> str:
+    for part in value.split(";"):
+        key, sep, raw = part.strip().partition("=")
+        if sep and key.lower() == "for":
+            return raw.strip().strip('"').strip("[]")
+    return ""
 
 
 def _client_ip(request: Request, db: Session) -> str:
@@ -47,6 +78,20 @@ def _client_ip(request: Request, db: Session) -> str:
         fwd = request.headers.get("x-forwarded-for")
         if fwd:
             return fwd.split(",")[0].strip()
+        real_ip = request.headers.get("x-real-ip")
+        if real_ip:
+            return real_ip.strip()
+        forwarded = request.headers.get("forwarded")
+        if forwarded:
+            parsed = _forwarded_for_value(forwarded.split(",")[0])
+            if parsed:
+                return parsed
+    if any(request.headers.get(h) for h in _FORWARDED_CLIENT_IP_HEADERS):
+        # Uvicorn can rewrite request.client from X-Forwarded-For before the app
+        # sees the request. When the DB setting says not to trust proxy headers,
+        # bucket all such requests together instead of letting attackers rotate
+        # spoofed header values to bypass login/signup limits.
+        return _UNTRUSTED_FORWARDED_IP
     return request.client.host if request.client else ""
 
 
@@ -90,6 +135,7 @@ def _user_out(user: User, db: Session | None = None) -> dict:
         "demo_generations_remaining": user.demo_generations_remaining,
         "credits_per_usd": credits_per_usd,
         "credit_value_usd": round(1 / max(credits_per_usd, 1), 4),
+        "pay_code": user.pay_code or "",
     }
 
 
@@ -109,7 +155,8 @@ def register(body: Credentials, request: Request, response: Response,
     user = User(email=body.email, password_hash=hash_password(body.password),
                 signup_fingerprint=body.fingerprint, signup_ip=ip,
                 token_balance=starting_credits,
-                lifetime_tokens_granted=starting_credits)
+                lifetime_tokens_granted=starting_credits,
+                pay_code=pay_codes.generate_unique_code(db))
     db.add(user)
     db.commit()
     log_user_activity(db, user, "registered", meta={"token_balance": user.token_balance})
@@ -146,7 +193,10 @@ def login(body: Credentials, request: Request, response: Response,
           db: Session = Depends(get_db)):
     ip, window = _login_guard(db, "login", request, body.email)
     user = db.query(User).filter(User.email == body.email).first()
-    if not user or not verify_password(body.password, user.password_hash):
+    # Always verify against a real hash (dummy when the user is absent) so timing
+    # doesn't reveal whether the email exists.
+    password_ok = verify_password(body.password, user.password_hash if user else _DUMMY_PASSWORD_HASH)
+    if not user or not password_ok:
         _record_login_failure("login", ip, body.email, window)
         raise HTTPException(401, "invalid email or password")
     if user.disabled:
@@ -163,8 +213,11 @@ def admin_login(body: Credentials, request: Request, response: Response,
                 db: Session = Depends(get_db)):
     ip, window = _login_guard(db, "admin-login", request, body.email)
     user = db.query(User).filter(User.email == body.email).first()
-    if (not user or user.role != "admin" or user.disabled
-            or not verify_password(body.password, user.password_hash)):
+    # Run PBKDF2 unconditionally (dummy hash when absent/non-admin) so response
+    # latency can't distinguish "registered admin" from "not an admin / no such
+    # user" — otherwise the short-circuit leaks which emails are admins.
+    password_ok = verify_password(body.password, user.password_hash if user else _DUMMY_PASSWORD_HASH)
+    if (not user or user.role != "admin" or user.disabled or not password_ok):
         _record_login_failure("admin-login", ip, body.email, window)
         raise HTTPException(401, "invalid admin credentials")
     _clear_login_failures("admin-login", ip, body.email)

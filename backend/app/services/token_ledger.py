@@ -9,6 +9,18 @@ from .user_activity import log_user_activity
 DEMO_PROJECT_BUDGET_USD = 5
 
 
+def billing_mode_for(project: Project, user: User | None) -> str:
+    if user is None:
+        return "missing_owner"
+    if user.role == "admin":
+        return "client_simulation" if project.billing_mode == "client_simulation" else "admin_bypass"
+    return "client"
+
+
+def uses_client_billing(project: Project, user: User | None) -> bool:
+    return billing_mode_for(project, user) in {"client", "client_simulation"}
+
+
 def tokens_for_budget(db: Session, budget_usd: float) -> int:
     tokens_per_usd = int(get_setting(db, "tokens_per_usd") or 100)
     return max(1, int(round(budget_usd * tokens_per_usd)))
@@ -64,7 +76,8 @@ def debit_project_tokens(db: Session, user: User, budget_usd: float,
 
 
 def authorize_project_credits(db: Session, user: User, phase_keys: list[str],
-                              budget_usd: float, project_title: str) -> dict:
+                              budget_usd: float, project_title: str,
+                              simulate_client_billing: bool = False) -> dict:
     """Pre-run check for the metered model: no upfront debit — credits are burned
     per phase as work completes. Verifies the user can start, and consumes the
     one-time trial slot for tiny projects. The trial still spends starter credits
@@ -73,10 +86,12 @@ def authorize_project_credits(db: Session, user: User, phase_keys: list[str],
     ensure_credit_columns(user, demo_credits)
     est = credit_pricing.estimate(phase_keys, budget_usd=budget_usd, db=db)
 
-    if user.role == "admin":
+    if user.role == "admin" and not simulate_client_billing:
         return {"demo_run": False, "admin_bypass": True, **est,
                 "token_balance": user.token_balance,
-                "surcharge_risk": "low"}
+                "surcharge_risk": "low",
+                "billing_mode": "admin_bypass",
+                "billing_note": "admin project: client credits are not charged"}
 
     # Trial run for tiny projects while a demo generation remains. It spends the
     # starter balance per phase, so the user sees honest credit accounting.
@@ -88,12 +103,29 @@ def authorize_project_credits(db: Session, user: User, phase_keys: list[str],
                 "credits_estimate": est["credits_estimate"],
                 "token_balance": user.token_balance,
             })
-        user.demo_generations_remaining -= 1
+        # Atomically claim the one-time trial slot. A plain read-decrement lets a
+        # burst of concurrent POST /projects requests all observe
+        # demo_generations_remaining == 1 and each start a "trial" run (TOCTOU),
+        # turning one $1 trial into N free concurrent builds. The conditional
+        # UPDATE makes the DB enforce "exactly one": only the request whose
+        # WHERE still sees a positive count wins; the rest fall through to normal
+        # paid billing (credits_min check below).
+        claimed = (db.query(User)
+                   .filter(User.id == user.id, User.demo_generations_remaining > 0)
+                   .update({User.demo_generations_remaining:
+                            User.demo_generations_remaining - 1},
+                           synchronize_session=False))
         db.commit()
-        log_user_activity(db, user, "trial_run_started",
-                          meta={"project_title": project_title, **est})
-        return {"demo_run": True, "admin_bypass": False, **est,
-                "token_balance": user.token_balance, "surcharge_risk": "low"}
+        db.refresh(user)
+        if claimed:
+            log_user_activity(db, user, "trial_run_started",
+                              meta={"project_title": project_title, **est})
+            return {"demo_run": True, "admin_bypass": False, **est,
+                    "token_balance": user.token_balance, "surcharge_risk": "low",
+                    "billing_mode": "client_simulation" if user.role == "admin" else "client",
+                    "billing_note": ("admin test mode: charges credits like a client"
+                                     if user.role == "admin" else "client trial run")}
+        # lost the trial-slot race → continue as a normal paid project
 
     if user.token_balance < est["credits_min"]:
         raise HTTPException(402, {
@@ -105,7 +137,10 @@ def authorize_project_credits(db: Session, user: User, phase_keys: list[str],
 
     return {"demo_run": False, "admin_bypass": False, **est,
             "token_balance": user.token_balance,
-            "surcharge_risk": credit_pricing.surcharge_risk(est["credits_max"], user.token_balance)}
+            "surcharge_risk": credit_pricing.surcharge_risk(est["credits_max"], user.token_balance),
+            "billing_mode": "client_simulation" if user.role == "admin" else "client",
+            "billing_note": ("admin test mode: charges credits like a client"
+                             if user.role == "admin" else "client billing")}
 
 
 def charge_phase_credits(db: Session, project: Project, phase_key: str) -> dict:
@@ -122,19 +157,63 @@ def charge_phase_credits(db: Session, project: Project, phase_key: str) -> dict:
     project.estimated_usd_cost = round(sum(float(c.cost_estimated_usd) for c in calls), 6)
 
     user = db.get(User, project.user_id) if project.user_id else None
-    if user is None or user.role == "admin":
+    mode = billing_mode_for(project, user)
+    if not uses_client_billing(project, user):
         db.commit()
         return {"stopped": False, "charged": 0, "demo": bool(project.demo_run),
-                "credits_spent": project.credits_spent}
+                "credits_spent": project.credits_spent,
+                "billing_mode": mode,
+                "billing_reason": mode}
 
-    if user.token_balance < credits:
+    # Atomic conditional debit: the "balance >= credits" guard lives in the
+    # WHERE clause so concurrent phase charges across the same user's projects
+    # cannot both pass the check and drive the balance negative (TOCTOU). Only
+    # the debit that still sees enough balance succeeds; the loser reports a
+    # shortfall exactly as an upfront check would.
+    debited = (db.query(User)
+               .filter(User.id == user.id, User.token_balance >= credits)
+               .update({User.token_balance: User.token_balance - credits,
+                        User.lifetime_tokens_spent: User.lifetime_tokens_spent + credits},
+                       synchronize_session=False))
+    if not debited:
         db.commit()
+        db.refresh(user)
         return {"stopped": True, "charged": 0, "shortfall": credits - user.token_balance,
-                "credits_spent": project.credits_spent, "token_balance": user.token_balance}
+                "credits_spent": project.credits_spent, "token_balance": user.token_balance,
+                "billing_mode": mode,
+                "billing_reason": "insufficient_client_credits"}
 
-    user.token_balance -= credits
-    user.lifetime_tokens_spent += credits
     project.credits_spent += credits
     db.commit()
+    db.refresh(user)
     return {"stopped": False, "charged": credits, "demo": False,
-            "credits_spent": project.credits_spent, "token_balance": user.token_balance}
+            "credits_spent": project.credits_spent, "token_balance": user.token_balance,
+            "billing_mode": mode,
+            "billing_reason": "client_credits_charged"}
+
+
+def refund_project_credits(db: Session, project: Project, reason: str) -> dict:
+    """Return every credit charged for a project to its owner.
+
+    Per-phase charging caps the founder's runaway-cost risk DURING a run, but a
+    client must never end up paying for a project they cannot download. When the
+    pipeline terminates without a client-deliverable result (release blocked,
+    partial, or internal-repair needed), refund the full amount and zero the
+    per-phase markers so the ledger stays honest. Admin/bypass projects were
+    never charged, so this is a no-op for them. Idempotent: a project already at
+    0 credits_spent refunds nothing."""
+    from ..models import ProjectPhase
+    user = db.get(User, project.user_id) if project.user_id else None
+    spent = int(project.credits_spent or 0)
+    if user is None or spent <= 0 or not uses_client_billing(project, user):
+        return {"refunded": 0, "reason": reason}
+    user.token_balance = (user.token_balance or 0) + spent
+    user.lifetime_tokens_spent = max(0, (user.lifetime_tokens_spent or 0) - spent)
+    project.credits_spent = 0
+    for ph in db.query(ProjectPhase).filter(ProjectPhase.project_id == project.id).all():
+        ph.credits_charged = 0
+    db.commit()
+    log_user_activity(db, user, "credits_refunded", project_id=project.id,
+                      meta={"refunded": spent, "reason": reason,
+                            "token_balance": user.token_balance})
+    return {"refunded": spent, "reason": reason, "token_balance": user.token_balance}

@@ -1,4 +1,12 @@
-"""Artifact Packager: final user-facing documents + project.zip."""
+"""Artifact Packager: final user-facing documents + project.zip.
+
+Invariant: the release decision is computed over EXACTLY the bytes that ship.
+All transformations (secret redaction, internal-name sanitization, doc
+generation) happen in place on the tree first, then the gates run, then the
+zip archives the tree verbatim — so a file can never pass a check in one form
+and ship in another.
+"""
+import ast
 import json
 import zipfile
 from pathlib import Path
@@ -23,7 +31,41 @@ def _write_public(path: Path, text: str) -> None:
     path.write_text(_public_text(text))
 
 
-def _zip_public_file(zf: zipfile.ZipFile, workspace: Path, f: Path) -> None:
+def _finalize_tree(workspace: Path) -> dict:
+    """Apply the internal-name sanitizer to the shippable tree IN PLACE, so the
+    gates and the archive see the same bytes. Cosmetic sanitization must never
+    corrupt code: a ``.py`` edit that stops parsing is skipped (an internal-name
+    echo in code is harmless next to shipping a broken file)."""
+    sanitized = 0
+    skipped_code = 0
+    for sub in ("repo", "artifacts"):
+        base = workspace / sub
+        if not base.exists():
+            continue
+        for f in sorted(base.rglob("*")):
+            if not f.is_file() or f.name == "project.zip":
+                continue
+            if f.suffix.lower() not in _TEXT_SUFFIXES and not f.name.endswith(".example"):
+                continue
+            try:
+                original = f.read_text(errors="replace")
+            except OSError:
+                continue
+            cleaned, hits = sanitize(original)
+            if not hits or cleaned == original:
+                continue
+            if f.suffix == ".py":
+                try:
+                    ast.parse(cleaned)
+                except (SyntaxError, ValueError):
+                    skipped_code += 1
+                    continue
+            f.write_text(cleaned)
+            sanitized += 1
+    return {"files_sanitized": sanitized, "skipped_code_files": skipped_code}
+
+
+def _zip_file_verbatim(zf: zipfile.ZipFile, workspace: Path, f: Path) -> None:
     rel = f.relative_to(workspace)
     if any(part in {"logs", "reviews", "spec", "architecture"} for part in rel.parts):
         return
@@ -31,10 +73,9 @@ def _zip_public_file(zf: zipfile.ZipFile, workspace: Path, f: Path) -> None:
         return
     if f.name in {"implementation-log.md"}:
         return
-    if f.suffix.lower() in _TEXT_SUFFIXES or f.name.endswith(".example"):
-        zf.writestr(str(rel), _public_text(f.read_text(errors="replace")))
-    else:
-        zf.write(f, rel)
+    # the tree is already redacted + sanitized; archive it byte-for-byte so the
+    # client receives exactly what the gates approved
+    zf.write(f, rel)
 
 
 def package(db: Session, project, workspace: Path) -> tuple[Path, dict]:
@@ -48,12 +89,28 @@ def package(db: Session, project, workspace: Path) -> tuple[Path, dict]:
                                          Issue.status == "open").all()
     budget = budget_engine.load_budget_state(workspace)
 
+    # INSTALL must describe THIS tree, not a generic template: steps that name
+    # files that do not exist (e.g. `.env.example`) fail the docs gates and
+    # confuse the client.
+    repo_dir = workspace / "repo"
+    install_steps = ["1. Распакуйте `project.zip`."]
+    if repo_dir.exists() and any(repo_dir.iterdir()):
+        install_steps.append(
+            "2. Create a virtualenv: `python -m venv .venv && source .venv/bin/activate`")
+        req = repo_dir / "requirements.txt"
+        if req.exists() and req.read_text(errors="replace").strip():
+            install_steps.append("3. Inside `repo/`: `pip install -r requirements.txt`.")
+        if (repo_dir / "package.json").exists():
+            install_steps.append(f"{len(install_steps) + 1}. Inside `repo/`: `npm install`.")
+        if (repo_dir / ".env.example").exists():
+            install_steps.append(
+                f"{len(install_steps) + 1}. Copy `.env.example` to `.env` and fill values.")
+        install_steps.append(
+            f"{len(install_steps) + 1}. Run the entry point described in `repo/README.md`.")
+    else:
+        install_steps.append("2. Основной результат — в `artifacts/main-document.md`.")
     _write_public(art / "INSTALL.md",
-        "# Установка\n\n1. Распакуйте `project.zip`.\n"
-        "2. Create a virtualenv: `python -m venv .venv && source .venv/bin/activate`\n"
-        "3. Inside `repo/`: `pip install -r requirements.txt` (if present).\n"
-        "4. Copy `.env.example` to `.env` and fill values.\n"
-        "5. Run the entry point described in `repo/README.md`.\n")
+                  "# Установка\n\n" + "\n".join(install_steps) + "\n")
 
     _write_public(art / "business-plan.md",
         f"# Бизнес-план — {project.title}\n\n"
@@ -114,17 +171,20 @@ def package(db: Session, project, workspace: Path) -> tuple[Path, dict]:
         + "- `artifacts/` — итоговые документы, ограничения и следующие шаги\n"
         "- `INSTALL.md` — запуск проекта\n")
 
-    # --- security gate: scan for secrets first, so it can create .env.example
-    # etc. *before* the release policy inspects the filesystem below. Running
-    # this after evaluate() would make the policy judge a stale tree (e.g.
-    # flagging env_example_exists=False right before the scanner creates it).
+    # --- finalize the shippable tree BEFORE the release decision: secret
+    # redaction and internal-name sanitization both happen in place here, so
+    # evaluate() judges the exact bytes the client would download. Running any
+    # transformation after evaluate() would let a file pass a check in one form
+    # and ship broken in another (the bug this ordering exists to prevent).
     from .secret_scanner import scan_and_redact
     from .security_report import build as build_security_report
     from .settings_service import get_setting
 
     secret_scan = scan_and_redact(workspace)
+    finalize_stats = _finalize_tree(workspace)
+    secret_scan["sanitize_stats"] = finalize_stats
 
-    # final release decision over the complete artifact set
+    # final release decision over the complete, finalized artifact set
     release_decision = evaluate(db, project.id, workspace, is_code_project=requires_code)
     if release_decision.get("notes"):
         with open(art / "limitations.md", "a") as f:
@@ -154,7 +214,7 @@ def package(db: Session, project, workspace: Path) -> tuple[Path, dict]:
                 continue
             for f in sorted(base.rglob("*")):
                 if f.is_file() and f.stat().st_size <= max_bytes:
-                    _zip_public_file(zf, workspace, f)
+                    _zip_file_verbatim(zf, workspace, f)
 
     known = {a.path for a in db.query(Artifact)
              .filter(Artifact.project_id == project.id).all()}

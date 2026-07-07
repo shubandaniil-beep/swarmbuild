@@ -19,6 +19,8 @@ interface BillingSummary {
   credits_per_usd: number;
   credit_value_usd: number;
   packs: BillingPack[];
+  pay_code: string;
+  payment_bot_url: string;
   payment_note: string;
 }
 
@@ -36,8 +38,8 @@ export default function Settings() {
   const [role, setRole] = useState<string | null>(null);
   const [summary, setSummary] = useState<BillingSummary | null>(null);
   const [topups, setTopups] = useState<Topup[]>([]);
-  const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
+  const [copied, setCopied] = useState(false);
 
   async function load() {
     const [s, t] = await Promise.all([
@@ -58,23 +60,18 @@ export default function Settings() {
     load().catch((e) => setError(String(e)));
   }, []);
 
-  async function requestTopup(pack: BillingPack) {
-    setBusy(pack.id);
-    setError("");
+  async function copyCode() {
+    if (!summary?.pay_code) return;
     try {
-      await api("/api/billing/topups", {
-        method: "POST",
-        body: JSON.stringify({ credits: pack.credits, provider: "telegram_stars" }),
-      });
-      await load();
-    } catch (e) {
-      setError(String(e));
-    } finally {
-      setBusy("");
+      await navigator.clipboard.writeText(summary.pay_code);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      /* clipboard может быть недоступен — код всё равно виден на экране */
     }
   }
 
-  if (error) return <p className="text-red-400">{error}</p>;
+  if (error && !summary) return <p className="text-red-400">{error}</p>;
   if (!summary) return <p className="text-zinc-500">Загрузка…</p>;
 
   return (
@@ -113,24 +110,42 @@ export default function Settings() {
         </div>
       </div>
 
+      <section className="card p-5">
+        <p className="kicker mb-2">Ваш код оплаты</p>
+        <p className="text-sm text-zinc-500 mb-3">
+          Отправьте этот код боту оплаты один раз, чтобы привязать Telegram к аккаунту.
+          После этого оплаты звёздами будут начисляться в credits автоматически. Код
+          постоянный — второй раз вводить не нужно.
+        </p>
+        <div className="flex flex-wrap items-center gap-3">
+          <span className="font-mono text-3xl tracking-[0.35em] text-amber-400 select-all">
+            {summary.pay_code || "——————"}
+          </span>
+          <button onClick={copyCode} className="btn-ghost px-4 py-2 text-sm">
+            {copied ? "Скопировано ✓" : "Скопировать"}
+          </button>
+          {summary.payment_bot_url && (
+            <a href={summary.payment_bot_url} target="_blank" rel="noreferrer"
+               className="btn-primary px-4 py-2 text-sm">
+              Открыть бота оплаты →
+            </a>
+          )}
+        </div>
+        {error && summary && <p className="mt-3 text-sm text-red-400">{error}</p>}
+      </section>
+
       <section>
-        <p className="kicker mb-3">Пополнение</p>
+        <p className="kicker mb-3">Пакеты пополнения</p>
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
           {summary.packs.map((pack) => (
-            <button key={pack.id}
-                    onClick={() => requestTopup(pack)}
-                    disabled={!!busy}
-                    className="card p-4 text-left hover:border-amber-400/50 disabled:opacity-50">
+            <div key={pack.id} className="card p-4">
               <span className="block text-sm font-semibold">{pack.label}</span>
               <span className="mt-2 block text-2xl font-bold text-amber-400">
                 {pack.credits.toLocaleString("ru-RU")}
               </span>
               <span className="block text-xs text-zinc-500">credits = ${pack.amount_usd}</span>
               <span className="mt-3 block text-xs text-zinc-500">{pack.best_for}</span>
-              <span className="mt-4 inline-flex text-xs text-amber-300">
-                {busy === pack.id ? "Создаю заявку…" : "Создать заявку"}
-              </span>
-            </button>
+            </div>
           ))}
         </div>
         <p className="mt-3 text-xs text-zinc-500">{summary.payment_note}</p>

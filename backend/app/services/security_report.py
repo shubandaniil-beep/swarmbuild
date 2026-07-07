@@ -41,6 +41,12 @@ def build(project, workspace: Path, secret_scan: dict) -> str:
         for f in secret_scan.get("findings", [])[:20]:
             lines.append(f"  - `{f['file']}` → {', '.join(f['types'])}")
         lines.append("")
+    broken = secret_scan.get("syntax_broken_by_redaction", [])
+    if broken:
+        lines += ["- ⚠ Redaction затронула синтаксис следующих файлов — релиз "
+                  "блокируется до их починки:", ""]
+        lines += [f"  - `{rel}`" for rel in broken[:10]]
+        lines.append("")
 
     # 2. sandbox
     lines += ["## Sandbox-команды", ""]

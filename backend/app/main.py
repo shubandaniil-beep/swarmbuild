@@ -7,7 +7,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from .api import admin, auth, billing, projects
+from .api import admin, auth, billing, projects, telegram
 from .database import init_db
 
 # AI-call diagnostics (provider, model, status, redacted errors). Uvicorn owns
@@ -109,6 +109,7 @@ async def security_headers(request: Request, call_next):
 
 app.include_router(auth.router)
 app.include_router(billing.router)
+app.include_router(telegram.router)
 app.include_router(projects.router)
 app.include_router(admin.router)
 

@@ -137,7 +137,7 @@ def _mini_crm(title: str, brief: str) -> dict[str, str]:
         "README.md": f"# {title}\n\nMini-CRM skeleton (FastAPI + SQLite + static HTML).\n\n"
                      "```bash\npip install -r requirements.txt\nuvicorn app:app --reload\n```\n\n"
                      "Open http://127.0.0.1:8000\n",
-        "requirements.txt": "fastapi>=0.110\nuvicorn>=0.29\n",
+        "requirements.txt": "fastapi>=0.110\nuvicorn>=0.29\npydantic>=2.0\n",
         ".env.example": "DATABASE_PATH=crm.db\n",
         "app.py": '''"""Mini-CRM: leads CRUD + static UI."""
 import os

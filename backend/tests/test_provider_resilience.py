@@ -8,7 +8,7 @@ retried instead.
 """
 import pytest
 
-from app.providers.base import ProviderHTTPError, ProviderResult
+from app.providers.base import ProviderHTTPError, ProviderResult, guard_egress_url
 from app.services import agent_runner, key_pool
 from app.services.agent_runner import _cooldown_seconds
 
@@ -216,3 +216,30 @@ def test_permanent_error_disables_key_and_stops_immediately(client, monkeypatch)
         assert key.status == "error"
     finally:
         db.close()
+
+
+def test_egress_guard_blocks_ssrf_to_internal_targets():
+    """Runtime SSRF guard: a provider base_url that resolves to loopback or
+    link-local (cloud metadata 169.254.169.254) is refused right before the
+    request, closing the DNS-rebinding window; public LLM hosts pass."""
+    for blocked in ("http://169.254.169.254/latest/meta-data/",
+                    "http://127.0.0.1:8000/v1",
+                    "http://localhost/v1",
+                    "http://[::1]/v1",
+                    "http://10.0.0.5/v1",
+                    "http://172.16.0.5/v1",
+                    "http://192.168.1.5/v1"):
+        with pytest.raises(RuntimeError):
+            guard_egress_url(blocked)
+
+    # Explicit private-provider mode allows RFC1918 LAN targets, but still not
+    # loopback or link-local metadata.
+    guard_egress_url("http://10.0.0.5/v1", allow_private=True)
+    with pytest.raises(RuntimeError):
+        guard_egress_url("http://127.0.0.1:8000/v1", allow_private=True)
+    with pytest.raises(RuntimeError):
+        guard_egress_url("http://169.254.169.254/latest/meta-data/", allow_private=True)
+
+    # public provider endpoints are allowed (no exception)
+    for ok in ("https://api.openai.com/v1", "https://api.groq.com/openai/v1"):
+        guard_egress_url(ok)
