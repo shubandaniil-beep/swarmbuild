@@ -173,7 +173,16 @@ def build_ui_context(brief: str, project_type: str, mandate: str,
         "adapt its palette, copy and components to THIS project. Follow each recipe's "
         "own 'Adaptation rules'. Reuse the design tokens and component structure; "
         "change the content, not the craft. Any <component> blocks are drop-in "
-        "interactive pieces — use them where the project needs that behavior."
+        "interactive pieces — use them where the project needs that behavior.\n\n"
+        "### CRITICAL — ship FINISHED content, never a template\n"
+        "Deliver a fully rendered page with REAL content invented for THIS client from "
+        "the brief: a concrete brand/product name, a real headline and subcopy, real "
+        "numbers, real feature and section text. Write out every repeated block as "
+        "actual markup — e.g. three real feature cards, four real stat figures. "
+        "DO NOT output templating placeholders (`{{ variable }}`, `{% for %}`, "
+        "`{% if %}`, `${...}`, `<!-- TODO -->`) or empty loops: a human opening the "
+        "file must see a complete site, not variable names. If the brief omits a "
+        "detail, invent a plausible concrete value rather than leaving a placeholder."
     )
     parts = [header]
     used = est_tokens(header)
