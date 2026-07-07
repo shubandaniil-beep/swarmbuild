@@ -250,6 +250,12 @@ def run_agent(db: Session, workspace: Path, project, phase_key: str,
     personality_mode = personality.normalize(getattr(project, "personality_mode", None))
     build_style = personality.directive_for(personality_mode)
     system = _prompt("base_agent") + "\n\n" + _prompt(mandate) + "\n\nBuild style: " + build_style
+    # Inject vetted UI recipes so weak-UI models compose from patterns instead of
+    # inventing layout. Retrieval picks only the 1-2 closest recipes (token-safe).
+    from .ui_retrieval import build_ui_context
+    ui_context = build_ui_context(project.brief or "", project.project_type, mandate)
+    if ui_context:
+        system += "\n\n" + ui_context
     context = {
         "phase": phase_key,
         "mandate": mandate,
