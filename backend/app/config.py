@@ -36,8 +36,10 @@ class Settings:
     QWEN_API_KEY: str = _env("QWEN_API_KEY")
     GROQ_API_KEY: str = _env("GROQ_API_KEY")
     OPENROUTER_API_KEY: str = _env("OPENROUTER_API_KEY")
+    GLM_API_KEY: str = _env("GLM_API_KEY")
 
     OPENAI_BASE_URL: str = _env("OPENAI_BASE_URL", "https://api.openai.com/v1")
+    GLM_BASE_URL: str = _env("GLM_BASE_URL", "https://api.z.ai/api/paas/v4")
     ANTHROPIC_BASE_URL: str = _env("ANTHROPIC_BASE_URL", "https://api.anthropic.com")
 
     DEFAULT_MODEL_PROVIDER: str = _env("DEFAULT_MODEL_PROVIDER", "mock")

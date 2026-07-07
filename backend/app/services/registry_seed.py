@@ -31,6 +31,7 @@ _PROVIDERS = [
     ("Qwen", "qwen", "https://dashscope.aliyuncs.com/compatible-mode/v1", env.QWEN_API_KEY),
     ("Groq", "groq", "https://api.groq.com/openai/v1", env.GROQ_API_KEY),
     ("OpenRouter", "openrouter", "https://openrouter.ai/api/v1", env.OPENROUTER_API_KEY),
+    ("GLM", "glm", env.GLM_BASE_URL, env.GLM_API_KEY),
 ]
 
 _MODELS = [
@@ -57,6 +58,7 @@ _MODELS = [
      "low", 0, 0, True),
     ("OpenRouter Nemotron Free", "openrouter", "nvidia/nemotron-3-ultra-550b-a55b:free",
      "low", 0, 0, True),
+    ("GLM 5.2", "glm", "glm-5.2", "high", 0.6, 2.2, True),
 ]
 
 # (name, price_usd, swarm, max_phases, modes, credit_grant, bonus_%, description)

@@ -30,7 +30,7 @@ def _provider_error_from_body(raw: bytes) -> str:
 
 def _message_text(message: dict) -> str:
     content = message.get("content")
-    if isinstance(content, str):
+    if isinstance(content, str) and content.strip():
         return content
     if isinstance(content, list):
         parts = []
@@ -43,6 +43,13 @@ def _message_text(message: dict) -> str:
         # e.g. Gemini's OpenAI shim: the model decided to "call a tool" even
         # though no tools were offered → no usable text in the choice.
         raise ToolUseMismatchError("model attempted a tool call but no tools are configured")
+    # Reasoning-model fallback: a thinking model can burn its whole token
+    # budget on reasoning and hand back an empty `content` while the actual
+    # prose sits in `reasoning_content`. Better a billed call yields that than
+    # nothing at all.
+    reasoning = message.get("reasoning_content")
+    if isinstance(reasoning, str) and reasoning.strip():
+        return reasoning
     raise RuntimeError("provider returned a choice without message.content")
 
 
@@ -101,6 +108,13 @@ class OpenAICompatibleProvider(BaseProvider):
                 {"role": "user", "content": user},
             ],
         }
+        # z.ai GLM ships as a reasoning model: left on, it spends the whole
+        # max_tokens budget on `reasoning_content` and returns an EMPTY
+        # `content` (finish_reason=length) — a billed call with no usable
+        # result. We want the answer, not the monologue: disable thinking so
+        # it responds directly (≈3x faster, no wasted reasoning tokens).
+        if self.card.get("provider") == "glm":
+            payload["thinking"] = {"type": "disabled"}
         headers = {"Content-Type": "application/json",
                    "Authorization": f"Bearer {self.api_key}",
                    "User-Agent": "SwarmBuild/1.0"}

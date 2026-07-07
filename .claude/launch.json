@@ -5,7 +5,7 @@
       "name": "swarmbuild-backend",
       "cwd": "backend",
       "runtimeExecutable": ".venv/bin/uvicorn",
-      "runtimeArgs": ["app.main:app", "--reload", "--port", "8000"],
+      "runtimeArgs": ["app.main:app", "--reload", "--reload-dir", "app", "--port", "8000"],
       "port": 8000
     },
     {
