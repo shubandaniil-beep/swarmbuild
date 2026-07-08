@@ -19,6 +19,9 @@ PHASE_MANDATES: dict[str, list[str]] = {
     "review_stop": ["reviewer", "reviewer", "judge", "critic", "reviewer", "critic", "reviewer", "judge"],
     "repair_sprint": ["repairer", "reviewer", "repairer", "judge", "repairer", "reviewer", "critic", "reviewer"],
     "final_audit": ["judge", "reviewer", "critic", "reviewer", "judge", "critic", "reviewer", "reviewer"],
+    # single_file is a solo finishing pass: the strongest model fuses the web
+    # build into one self-contained index.html — no committee, just the author.
+    "single_file": ["assembler"],
     "packaging": ["packager", "reviewer", "judge", "packager", "reviewer", "critic", "packager", "reviewer"],
 }
 
@@ -38,17 +41,20 @@ _STRENGTH = {"high": 4, "medium": 3, "low": 2, "free": 1}
 # code, repairs). On these the strongest available model MUST hold the author
 # mandate so a weak-heavy pool still yields a comprehensive result; the checker
 # roles stay rotated by the independence pass, so cross-checking is preserved.
-_AUTHOR_PHASES = {"spec_war", "architecture_battle", "build_sprint", "repair_sprint"}
+_AUTHOR_PHASES = {"spec_war", "architecture_battle", "build_sprint", "repair_sprint",
+                  "single_file"}
 # The mandate that authors each deliverable phase's primary artifact. Spec and
-# architecture are led; code and repairs are built/repaired.
+# architecture are led; code and repairs are built/repaired; the single-file
+# fusion is the deliverable, so it goes to the strongest model too.
 _PRIMARY_AUTHOR = {
     "spec_war": "lead",
     "architecture_battle": "lead",
     "build_sprint": "builder",
     "repair_sprint": "repairer",
+    "single_file": "assembler",
 }
 # Fallback resolution order if the phase's primary mandate was trimmed out.
-_AUTHOR_MANDATES = ("builder", "repairer", "lead")
+_AUTHOR_MANDATES = ("assembler", "builder", "repairer", "lead")
 
 
 def model_strength(card: dict) -> int:

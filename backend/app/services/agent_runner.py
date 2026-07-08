@@ -86,6 +86,14 @@ def _render_context_sections(extra: dict) -> str:
     if extra.get("micro_task"):
         sections.append("## Current micro-task\n" + _clip(extra["micro_task"], 2500))
 
+    # Full source contents for the ASSEMBLER (pre-capped by the orchestrator).
+    source_files = extra.get("source_files") or {}
+    if source_files:
+        parts = [f"### {path}\n```\n{content}\n```"
+                 for path, content in source_files.items()]
+        sections.append("## Source files to fuse into ONE index.html (full contents)\n"
+                        + "\n\n".join(parts))
+
     return ("\n\n" + "\n\n".join(sections)) if sections else ""
 
 

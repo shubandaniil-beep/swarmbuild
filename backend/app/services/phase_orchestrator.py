@@ -451,6 +451,10 @@ def _run_phase(db: Session, project, ws: Path, phase: ProjectPhase,
         extra["gate_failures"] = _gate_failure_details(gate_preview)
         extra["spec_excerpt"] = _read_excerpt(ws / "spec" / "technical-spec.md")
         extra["build_log_tail"] = _command_log_tail(ws)
+    if key == "single_file":
+        # hand the assembler the full web sources to fuse into one index.html
+        extra["source_files"] = _web_source_bundle(ws)
+        extra["repo_files"] = _repo_listing(ws)
 
     spent = 0.0
     parsed_files = 0  # files emitted through the builder/repairer file contract
@@ -459,8 +463,14 @@ def _run_phase(db: Session, project, ws: Path, phase: ProjectPhase,
     runnable = [
         assignment for assignment in assignments
         if not (saving and assignment["mandate"] not in ("lead", "builder", "repairer",
-                                                         "judge", "packager", "reviewer"))
+                                                         "judge", "packager", "reviewer",
+                                                         "assembler"))
     ]
+    if key == "single_file" and not extra.get("source_files"):
+        # nothing web to fuse (e.g. backend/CLI project) — skip this pass entirely
+        log_event(db, project.id, "single_file_skipped",
+                  "Нет web-файлов для склейки — этап пропущен", {"phase": key}, ws)
+        runnable = []
 
     results = None
     if key == "build_sprint" and is_code_project:
@@ -548,6 +558,19 @@ def _run_phase(db: Session, project, ws: Path, phase: ProjectPhase,
             break
 
     phase.spent_estimated_usd = spent
+
+    # single-file fusion: honour the assembler's DELETE: markers so the finished
+    # deliverable is exactly one self-contained index.html, not the old sources.
+    if key == "single_file":
+        from ..lib.file_extractor import extract_deletions
+        removed_total = 0
+        for _assignment, _agent_id, result, _cost in results:
+            removed_total += len(integration.apply_deletions(
+                ws, extract_deletions(result.text)))
+        if parsed_files or removed_total:
+            log_event(db, project.id, "single_file_assembled",
+                      f"Склеен один index.html; удалено {removed_total} исходных файл(ов)",
+                      {"phase": key, "deleted": removed_total}, ws)
 
     # Models regularly bury code inside prose documents instead of the FILE
     # contract. Salvage it into repo/ so the work is judged (and billed) by
@@ -889,6 +912,34 @@ def _repo_listing(ws: Path) -> list[str]:
     if not repo.exists():
         return []
     return sorted(str(f.relative_to(repo)) for f in repo.rglob("*") if f.is_file())[:80]
+
+
+# The assembler works only from its prompt (no filesystem), so hand it the full
+# contents of the web sources to fuse. Capped so we never blow the provider
+# timeout/context: per-file and total char budgets.
+_WEB_SOURCE_EXTS = (".html", ".htm", ".css", ".js", ".mjs", ".svg")
+
+
+def _web_source_bundle(ws: Path, per_file: int = 24000,
+                       total: int = 60000) -> dict[str, str]:
+    repo = ws / "repo"
+    if not repo.exists():
+        return {}
+    bundle: dict[str, str] = {}
+    used = 0
+    for f in sorted(repo.rglob("*")):
+        if not f.is_file() or f.suffix.lower() not in _WEB_SOURCE_EXTS:
+            continue
+        try:
+            text = f.read_text()
+        except (UnicodeDecodeError, OSError):
+            continue
+        text = text[:per_file]
+        if used + len(text) > total:
+            break
+        bundle[str(f.relative_to(repo))] = text
+        used += len(text)
+    return bundle
 
 
 def _run_assignments_parallel(project_id: str, phase_key: str, assignments: list[dict],

@@ -20,6 +20,7 @@ PHASE_WEIGHTS: dict[str, int] = {
     "review_stop": 600,           # review
     "repair_sprint": 800,         # repair
     "final_audit": 400,           # final audit
+    "single_file": 0,             # single-file fusion — part of delivery, not billed
     "packaging": 250,             # packaging + export
 }
 
@@ -33,6 +34,7 @@ PHASE_LABELS: dict[str, str] = {
     "review_stop": "Ревью",
     "repair_sprint": "Доработка",
     "final_audit": "Финальный аудит",
+    "single_file": "Сборка в один файл",
     "packaging": "Упаковка и экспорт",
 }
 
@@ -80,10 +82,13 @@ def phase_weight(phase_key: str) -> int:
 
 def phase_credits(phase_key: str, phase_keys: list[str] | None = None,
                   project_total: int | None = None) -> int:
+    weight = phase_weight(phase_key)
+    if weight == 0:
+        return 0  # free phase (e.g. single_file delivery) — never charged
     if not phase_keys or not project_total:
-        return phase_weight(phase_key)
+        return weight
     total_weight = sum(phase_weight(p) for p in phase_keys) or 1
-    return max(1, round(project_total * phase_weight(phase_key) / total_weight))
+    return max(1, round(project_total * weight / total_weight))
 
 
 def breakdown(phase_keys: list[str], total_credits: int | None = None) -> list[dict]:

@@ -18,6 +18,10 @@ ACCESS_BY_MANDATE: dict[str, list[str]] = {
     # one coherent tree — full repo write, no packaging rights
     "integrator": ["read_brief", "read_spec", "read_repo", "write_repo_branch",
                    "read_logs", "write_review"],
+    # single-file fusion: reads the whole web build, rewrites it as one
+    # self-contained index.html and deletes the now-inlined sources
+    "assembler": ["read_brief", "read_spec", "read_repo", "write_repo_branch",
+                  "read_logs"],
 }
 
 

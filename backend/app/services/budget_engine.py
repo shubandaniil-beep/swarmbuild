@@ -4,14 +4,20 @@ from pathlib import Path
 
 from ..config import settings
 
-SHORT_PHASES = ["intake", "spec_war", "build_sprint", "review_stop", "packaging"]
+# `single_file` runs just before packaging: one strong-model pass that fuses a
+# web build into a single self-contained index.html (see prompts/assembler.md).
+SHORT_PHASES = ["intake", "spec_war", "build_sprint", "review_stop",
+                "single_file", "packaging"]
 BASIC_PHASES = ["intake", "swarm_understanding", "spec_war", "architecture_battle",
-                "build_sprint", "review_stop", "final_audit", "packaging"]
+                "build_sprint", "review_stop", "final_audit", "single_file", "packaging"]
 FULL_PHASES = ["intake", "swarm_understanding", "spec_war", "architecture_battle",
-               "build_sprint", "review_stop", "repair_sprint", "final_audit", "packaging"]
+               "build_sprint", "review_stop", "repair_sprint", "final_audit",
+               "single_file", "packaging"]
 
 
 def _phases_for(max_phases: int) -> list[str]:
+    # thresholds count the deliverable phases; single_file is an always-on
+    # finishing pass appended to every tier, so the tier cutoffs are unchanged.
     if max_phases >= 9:
         return FULL_PHASES
     if max_phases >= 8:
