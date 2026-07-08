@@ -30,7 +30,7 @@ def _static_site(title: str, brief: str) -> dict[str, str]:
     summary = (brief or "").strip().replace("<", "").replace(">", "")[:200]
     return {
         "index.html": f'''<!doctype html>
-<html lang="ru"><head><meta charset="utf-8">
+<html lang="ru" class="scroll-smooth"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{title}</title>
 <style>
@@ -39,10 +39,15 @@ def _static_site(title: str, brief: str) -> dict[str, str]:
   body {{ font-family:system-ui,sans-serif; color:var(--fg); background:var(--bg); line-height:1.6; }}
   header {{ padding:1rem 1.5rem; border-bottom:1px solid #e3e7e0; font-weight:600; }}
   .hero {{ max-width:52rem; margin:0 auto; padding:4rem 1.5rem; text-align:center; }}
-  .hero h1 {{ font-size:clamp(2rem,5vw,3.25rem); }}
-  .hero p {{ color:var(--muted); margin-top:1rem; }}
+  .hero h1 {{ font-size:clamp(2rem,5vw,3.25rem); animation:rise .7s ease both; }}
+  .hero p {{ color:var(--muted); margin-top:1rem; animation:rise .7s ease .1s both; }}
   .cta {{ display:inline-block; margin-top:2rem; padding:.75rem 1.75rem; border-radius:999px;
-          background:var(--accent); color:#fff; text-decoration:none; }}
+          background:var(--accent); color:#fff; text-decoration:none;
+          transition:transform .25s ease, box-shadow .25s ease; }}
+  .cta:hover {{ transform:translateY(-2px); box-shadow:0 8px 20px rgba(0,0,0,.15); }}
+  @keyframes rise {{ from {{ opacity:0; transform:translateY(20px); }} to {{ opacity:1; transform:none; }} }}
+  [data-reveal] {{ opacity:0; transform:translateY(24px); transition:.6s ease; }}
+  [data-reveal].in {{ opacity:1; transform:none; }}
   footer {{ text-align:center; color:var(--muted); padding:2rem; }}
 </style></head>
 <body>
@@ -50,9 +55,16 @@ def _static_site(title: str, brief: str) -> dict[str, str]:
 <main class="hero">
   <h1>{title}</h1>
   <p>{summary}</p>
-  <a class="cta" href="#">Начать</a>
+  <a class="cta" href="#more">Начать</a>
 </main>
+<section id="more" data-reveal style="max-width:52rem;margin:0 auto;padding:3rem 1.5rem;text-align:center;color:var(--muted)">
+  <p>Свяжитесь с нами, чтобы узнать больше.</p>
+</section>
 <footer>© {title}</footer>
+<script>
+  const io = new IntersectionObserver(es => es.forEach(e => e.isIntersecting && e.target.classList.add('in')), {{ threshold: .12 }});
+  document.querySelectorAll('[data-reveal]').forEach(el => io.observe(el));
+</script>
 </body></html>
 ''',
     }

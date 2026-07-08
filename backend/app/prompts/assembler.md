@@ -26,6 +26,25 @@ context. Produce ONE `index.html` that contains the entire site.
   (charset, viewport, title), `<body>`. It must render correctly opened straight
   from disk.
 
+## MAKE IT FEEL ALIVE (mandatory — a static, motionless page reads as broken)
+The page must feel crafted and responsive, not a flat mockup. As you assemble, add:
+- **Smooth scrolling & nav:** `class="scroll-smooth"` on `<html>`; header links use
+  in-page anchors (`href="#menu"`) that glide to the section.
+- **Hover feedback everywhere:** buttons get `transition hover:-translate-y-0.5
+  hover:shadow-lg`; cards/list items get `transition hover:scale-[1.02]`; links get a
+  color/underline transition. Nothing interactive should be visually inert.
+- **Reveal on scroll:** add `data-reveal` to each major section and include this ONCE
+  (inline, before `</body>`):
+  ```html
+  <style>[data-reveal]{opacity:0;transform:translateY(24px);transition:.6s ease}[data-reveal].in{opacity:1;transform:none}</style>
+  <script>const _io=new IntersectionObserver(es=>es.forEach(e=>e.isIntersecting&&e.target.classList.add('in')),{threshold:.12});document.querySelectorAll('[data-reveal]').forEach(el=>_io.observe(el));</script>
+  ```
+- **A subtle hero entrance** (fade/slide-in on load) so the page opens with life.
+- **Every interactive element must actually work:** the mobile menu opens/closes, the
+  form validates and shows a success message, any tabs/accordion/FAQ/carousel function.
+  Wire the real JS — no dead buttons, no `href="#"` that does nothing.
+Keep motion tasteful: ~300–600ms, ease, subtle. Never autoplay loud animation.
+
 ## OUTPUT CONTRACT
 1. Emit the single file with the file marker, then a fenced block with its FULL
    contents:
