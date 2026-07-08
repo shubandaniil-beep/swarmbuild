@@ -19,7 +19,43 @@ def generate_repo(project_type: str, title: str, brief: str) -> dict[str, str]:
         return _mini_crm(title, brief)
     if project_type == "telegram_bot":
         return _telegram_bot(title, brief)
+    if project_type in ("web_app", "landing_page", "dashboard"):
+        return _static_site(title, brief)
     return _python_utility(title, brief)
+
+
+def _static_site(title: str, brief: str) -> dict[str, str]:
+    """A web deliverable is a single self-contained index.html — the single_file
+    phase would fuse a richer build down to exactly this shape anyway."""
+    summary = (brief or "").strip().replace("<", "").replace(">", "")[:200]
+    return {
+        "index.html": f'''<!doctype html>
+<html lang="ru"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{title}</title>
+<style>
+  :root {{ --fg:#1c2a21; --muted:#5c6b60; --accent:#3f6b4c; --bg:#f7f8f5; }}
+  * {{ box-sizing:border-box; margin:0; }}
+  body {{ font-family:system-ui,sans-serif; color:var(--fg); background:var(--bg); line-height:1.6; }}
+  header {{ padding:1rem 1.5rem; border-bottom:1px solid #e3e7e0; font-weight:600; }}
+  .hero {{ max-width:52rem; margin:0 auto; padding:4rem 1.5rem; text-align:center; }}
+  .hero h1 {{ font-size:clamp(2rem,5vw,3.25rem); }}
+  .hero p {{ color:var(--muted); margin-top:1rem; }}
+  .cta {{ display:inline-block; margin-top:2rem; padding:.75rem 1.75rem; border-radius:999px;
+          background:var(--accent); color:#fff; text-decoration:none; }}
+  footer {{ text-align:center; color:var(--muted); padding:2rem; }}
+</style></head>
+<body>
+<header>{title}</header>
+<main class="hero">
+  <h1>{title}</h1>
+  <p>{summary}</p>
+  <a class="cta" href="#">Начать</a>
+</main>
+<footer>© {title}</footer>
+</body></html>
+''',
+    }
 
 
 def _python_utility(title: str, brief: str) -> dict[str, str]:

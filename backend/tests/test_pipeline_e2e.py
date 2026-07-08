@@ -67,6 +67,56 @@ def test_full_mock_pipeline(user_client):
     assert any(name.endswith("README.md") for name in archive.namelist())
 
 
+def test_web_project_delivers_single_index_html(user_client):
+    """A web deliverable must reach the client as ONE self-contained index.html —
+    no Python, no README, no zip in the headline list."""
+    from fastapi.testclient import TestClient
+
+    from app.database import SessionLocal
+    from app.main import app
+    from app.models import User
+
+    # top up the shared test user, then drive it through a FRESH client so the
+    # grant is visible (a fresh connection pool, unlike the long-lived fixture
+    # client) — and log in rather than register to avoid the network signup cap.
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.email == "user@example.com").first()
+        user.token_balance = 50_000
+        user.lifetime_tokens_granted = (user.lifetime_tokens_granted or 0) + 50_000
+        db.commit()
+    finally:
+        db.close()
+
+    with TestClient(app) as c:
+        res = c.post("/api/auth/login", json={
+            "email": "user@example.com", "password": "user-test-password-123"})
+        assert res.status_code == 200, res.text
+
+        res = c.post("/api/projects", json={
+            "title": "Сайт кофейни",
+            "brief": "Сделай простой сайт для кофейни: главная, о нас, контакты.",
+            "budget_usd": 1,
+            "requested_outputs": ["mvp"],
+            "project_type": "web_app",
+        })
+        assert res.status_code == 200, res.text
+        project_id = res.json()["project_id"]
+        assert c.post(f"/api/projects/{project_id}/start").status_code == 200
+
+        project = _wait_until_finished(c, project_id, timeout_s=120)
+        assert project["status"] == "ready", project
+
+        artifacts = c.get(f"/api/projects/{project_id}/artifacts").json()
+        names = {a["display_name"] for a in artifacts}
+        assert names == {"index.html"}, names  # the single deliverable, nothing else
+
+        art_id = artifacts[0]["id"]
+        content = c.get(
+            f"/api/projects/{project_id}/artifacts/{art_id}/content").json()["content"]
+        assert "<!doctype html" in content.lower()
+
+
 def test_fresh_user_full_pipeline_with_repair_charges_and_downloads(client):
     from fastapi.testclient import TestClient
 

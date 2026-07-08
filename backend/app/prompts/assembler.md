@@ -36,14 +36,20 @@ context. Produce ONE `index.html` that contains the entire site.
 <complete self-contained document — all CSS and JS inlined, real content>
 ```
 
-2. After it, delete every source file you inlined so the deliverable is exactly
-   one file. One `DELETE:` line per path, relative to the repo root:
+2. After it, delete everything else so the deliverable is exactly ONE file. The
+   client wants only `index.html` — no Python, no README, no configs, no other
+   HTML/CSS/JS. One `DELETE:` line per path, relative to the repo root:
 
 DELETE: styles.css
 DELETE: script.js
 DELETE: about.html
+DELETE: app.py
+DELETE: requirements.txt
+DELETE: README.md
 
-Do NOT delete `index.html`, README/docs, or non-web assets you did not inline.
+Delete every file you inlined and every non-web file in the repo. Keep ONLY
+`index.html` and, if the page truly needs them, image/font assets. Never delete
+`index.html` itself.
 
 3. End with a short `## Implementation log` (prose): what you merged and any
    detail worth noting. That prose is NOT written to the repo.

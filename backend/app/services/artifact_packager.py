@@ -20,6 +20,15 @@ from . import budget_engine
 FINAL_DOCS = ["README.md", "INSTALL.md", "business-plan.md", "pitch-deck-outline.md",
               "limitations.md", "next-steps.md", "cost-report.json"]
 
+# For these project types the deliverable is a single self-contained web page:
+# the client is handed just repo/index.html, everything else stays internal.
+WEB_DELIVERABLE_TYPES = {"web_app", "landing_page", "dashboard"}
+
+
+def is_single_file_web(project, workspace: Path) -> bool:
+    return (getattr(project, "project_type", "") in WEB_DELIVERABLE_TYPES
+            and (workspace / "repo" / "index.html").exists())
+
 _TEXT_SUFFIXES = {".md", ".txt", ".json", ".html", ".css", ".js", ".ts", ".tsx", ".py", ".env", ".example"}
 
 
@@ -223,6 +232,12 @@ def package(db: Session, project, workspace: Path) -> tuple[Path, dict]:
             db.add(Artifact(project_id=project.id, artifact_type="final",
                             path=f"artifacts/{f.name}", display_name=f.name,
                             safety_status=default_status))
+    # single-file web delivery: the self-contained index.html IS the deliverable,
+    # so register it as a final artifact the client can view/download directly.
+    if is_single_file_web(project, workspace) and "repo/index.html" not in known:
+        db.add(Artifact(project_id=project.id, artifact_type="final",
+                        path="repo/index.html", display_name="index.html",
+                        safety_status=default_status))
     # apply the resolved status to the whole project's artifact set
     for a in db.query(Artifact).filter(Artifact.project_id == project.id).all():
         a.safety_status = default_status

@@ -246,6 +246,9 @@ def _check_entrypoint(repo: Path) -> dict:
     for name in _ENTRYPOINTS:
         if (repo / name).exists():
             return _gate(True, f"entry point: {name}")
+    # a static site opens straight from index.html — that IS the entry point
+    if (repo / "index.html").exists() or (repo / "index.htm").exists():
+        return _gate(True, "web entry point: index.html")
     pkg = repo / "package.json"
     if pkg.exists():
         try:
@@ -278,7 +281,18 @@ def _check_python_syntax(repo: Path) -> dict:
     return _gate(True, f"{checked} python file(s) parse")
 
 
+def _is_static_page(repo: Path) -> bool:
+    """A self-contained single-page site (index.html, no code to install or run):
+    it opens straight in a browser, so README/INSTALL docs are not owed."""
+    if not (repo / "index.html").exists():
+        return False
+    return not (list(repo.rglob("*.py")) or (repo / "package.json").exists()
+                or (repo / "requirements.txt").exists())
+
+
 def _check_install_matches(workspace: Path, repo: Path) -> dict:
+    if _is_static_page(repo):
+        return _gate(True, "static single-page site — no install step needed")
     install = workspace / "artifacts" / "INSTALL.md"
     readme = repo / "README.md"
     if not install.exists() and not readme.exists():
@@ -303,6 +317,8 @@ def _check_install_matches(workspace: Path, repo: Path) -> dict:
 
 
 def _check_readme_references_real_files(repo: Path) -> dict:
+    if _is_static_page(repo):
+        return _gate(True, "static single-page site — no README needed")
     readme = repo / "README.md"
     if not readme.exists():
         return _gate(False, "repo has no README.md")

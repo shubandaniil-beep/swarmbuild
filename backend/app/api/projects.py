@@ -526,7 +526,7 @@ def phases(project_id: str, user: User = Depends(get_current_user),
 # deliverable. Business-plan/pitch-deck/limitations/etc. still ship INSIDE the
 # zip, they just do not clutter the top-level list. Admins can pass `?full=1`
 # to see every artifact (including internal phase outputs) for diagnostics.
-_HEADLINE_ARTIFACTS = ("project.zip", "README.md", "main-document.md")
+_HEADLINE_ARTIFACTS = ("index.html", "project.zip", "README.md", "main-document.md")
 
 
 @router.get("/{project_id}/artifacts")
@@ -539,6 +539,11 @@ def artifacts(project_id: str, full: bool = False,
     if not (full and user.role == "admin"):
         rows = [a for a in rows
                 if a.artifact_type == "final" and a.display_name in _HEADLINE_ARTIFACTS]
+        # single-file web delivery: the self-contained index.html is the whole
+        # deliverable — hand the client just that, not the zip/docs behind it.
+        single = [a for a in rows if a.display_name == "index.html"]
+        if single:
+            rows = single
         # keep a stable, meaningful order: archive first, then the main document
         rows.sort(key=lambda a: _HEADLINE_ARTIFACTS.index(a.display_name)
                   if a.display_name in _HEADLINE_ARTIFACTS else 99)

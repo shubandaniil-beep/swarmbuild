@@ -559,14 +559,18 @@ def _run_phase(db: Session, project, ws: Path, phase: ProjectPhase,
 
     phase.spent_estimated_usd = spent
 
-    # single-file fusion: honour the assembler's DELETE: markers so the finished
-    # deliverable is exactly one self-contained index.html, not the old sources.
+    # single-file fusion: honour the assembler's DELETE: markers, then (for web
+    # deliverables) deterministically reduce the repo to just the self-contained
+    # index.html plus any web assets — no stray Python, docs or configs.
     if key == "single_file":
         from ..lib.file_extractor import extract_deletions
         removed_total = 0
         for _assignment, _agent_id, result, _cost in results:
             removed_total += len(integration.apply_deletions(
                 ws, extract_deletions(result.text)))
+        from .artifact_packager import is_single_file_web
+        if is_single_file_web(project, ws):
+            removed_total += _reduce_repo_to_web(ws)
         if parsed_files or removed_total:
             log_event(db, project.id, "single_file_assembled",
                       f"Склеен один index.html; удалено {removed_total} исходных файл(ов)",
@@ -940,6 +944,28 @@ def _web_source_bundle(ws: Path, per_file: int = 24000,
         bundle[str(f.relative_to(repo))] = text
         used += len(text)
     return bundle
+
+
+# What a single-file web deliverable is allowed to keep: the page itself plus
+# whatever it genuinely references (styles, scripts, images, fonts). Everything
+# else the build produced (Python, docs, manifests, configs) is dropped.
+_WEB_KEEP_EXTS = (".html", ".htm", ".css", ".js", ".mjs", ".svg", ".png", ".jpg",
+                  ".jpeg", ".gif", ".webp", ".avif", ".ico", ".woff", ".woff2", ".ttf")
+
+
+def _reduce_repo_to_web(ws: Path) -> int:
+    """Delete every repo file that is not the page or a web asset. Returns count."""
+    repo = ws / "repo"
+    if not (repo / "index.html").exists():
+        return 0
+    removed = 0
+    for f in sorted(repo.rglob("*"), reverse=True):  # files before their dirs
+        if f.is_file() and f.suffix.lower() not in _WEB_KEEP_EXTS:
+            f.unlink()
+            removed += 1
+        elif f.is_dir() and not any(f.iterdir()):
+            f.rmdir()
+    return removed
 
 
 def _run_assignments_parallel(project_id: str, phase_key: str, assignments: list[dict],
